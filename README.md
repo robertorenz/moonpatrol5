@@ -10,14 +10,23 @@ as vector graphics at your screen's native resolution, and the view fills the wh
 
 ## Play
 
-Serve the folder and open it in a browser:
+With Node.js 18 or newer, there's nothing to install:
 
 ```bash
-python -m http.server 8765
-# then browse to http://localhost:8765
+git clone https://github.com/robertorenz/moonpatrol5.git
+cd moonpatrol5
+npm start        # serves the game at http://localhost:8080 (or the next free port)
+npm run dev      # same, and opens it in your browser
 ```
 
-Opening `index.html` straight from disk also works in most browsers.
+| Script | What it does |
+| --- | --- |
+| `npm start` | Starts the bundled zero-dependency static server (`scripts/serve.js`). Set the port with `PORT=9000 npm start` or `npm start -- --port 9000`. |
+| `npm run dev` | Same as `start`, and opens your default browser. |
+| `npm run check` | Syntax-checks every JavaScript file. |
+
+Any static server works too, for example `python -m http.server`. Opening `index.html`
+straight from disk also works in most browsers.
 
 ### Controls
 
@@ -67,6 +76,8 @@ Touch devices get on-screen buttons.
 
 ```
 index.html        page shell, modal dialogs, touch controls
+package.json      npm scripts: start, dev, check
+scripts/serve.js  zero-dependency static server used by npm start
 css/style.css     page styling
 js/audio.js       WebAudio sound effects, music sequencer, fanfare
 js/game.js        simulation, level generation, vector renderer

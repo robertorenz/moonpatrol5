@@ -1,0 +1,25 @@
+{
+  "name": "lunar-patrol",
+  "version": "1.0.0",
+  "description": "High-resolution browser tribute to the 1982 Moon Patrol arcade game.",
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "Roberto Renz",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robertorenz/moonpatrol5.git"
+  },
+  "homepage": "https://github.com/robertorenz/moonpatrol5#readme",
+  "bugs": {
+    "url": "https://github.com/robertorenz/moonpatrol5/issues"
+  },
+  "keywords": ["game", "arcade", "moon-patrol", "canvas", "html5", "retro"],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "dev": "node scripts/serve.js --open",
+    "check": "node --check js/audio.js && node --check js/game.js && node --check js/ui.js && node --check scripts/serve.js"
+  }
+}
