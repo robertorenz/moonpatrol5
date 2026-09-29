@@ -10,7 +10,11 @@ as vector graphics at your screen's native resolution, and the view fills the wh
 
 ## Play
 
-With Node.js 18 or newer, there's nothing to install:
+**Play online:** https://robertorenz.github.io/moonpatrol5/
+
+To run it locally instead:
+
+With Node.js 18 or newer there's nothing to install:
 
 ```bash
 git clone https://github.com/robertorenz/moonpatrol5.git
