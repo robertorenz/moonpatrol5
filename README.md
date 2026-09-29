@@ -1,5 +1,7 @@
 # Lunar Patrol
 
+![Lunar Patrol title screen](docs/screenshots/title.png)
+
 A high-resolution browser tribute to **Moon Patrol**, the 1982 arcade classic. Drive a
 six-wheeled patrol buggy across the lunar surface from point **A** to point **Z**: jump
 craters, blast rocks, and fight off attackers from the sky. As in the original, one fire button
@@ -45,6 +47,15 @@ straight from disk also works in most browsers.
 
 Touch devices get on-screen buttons.
 
+## Screenshots
+
+| | |
+| :---: | :---: |
+| ![Buggy jumping a crater while UFOs drop bombs](docs/screenshots/action.png) | ![A tank firing at the buggy in the lunar city](docs/screenshots/city.png) |
+| **Air attack:** jump craters and shoot down UFOs and their bombs | **Lunar city:** tanks, mines and craters on the ground |
+| ![Checkpoint celebration with fireworks](docs/screenshots/checkpoint.png) | ![Title screen](docs/screenshots/title.png) |
+| **Checkpoint:** stop, celebrate, and collect your time bonus | **Attract mode:** title, score table, demo play and high scores |
+
 ## Features
 
 - **Arcade gameplay:** a Beginner course A–Z, then a harder Champion course. Checkpoints at
@@ -80,6 +91,7 @@ Touch devices get on-screen buttons.
 
 ```
 index.html        page shell, modal dialogs, touch controls
+docs/screenshots/ README images
 package.json      npm scripts: start, dev, check
 scripts/serve.js  zero-dependency static server used by npm start
 css/style.css     page styling
