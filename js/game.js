@@ -562,11 +562,11 @@ const Game = (() => {
     for (const bm of G.bombs) {
       if (Math.abs(bm.x - gun) < 6 && bm.y < GROUND_Y - 40) inp.fire = true;
       // Predict the landing point and steer out of the way.
-      const t = (GROUND_Y - bm.y) / Math.max(0.5, bm.vy + 1);
-      const land = bm.x + bm.vx * t;
-      if (land > b.x - 4 && land < b.x + 38 && t < 50) {
+      const t = fallTime(GROUND_Y - bm.y) * clamp(0.25 / Math.max(0.25, bm.vy), 0.3, 1);
+      const land = bm.x + (bm.vx - G.speed) * t;
+      if (land > b.x - 8 && land < b.x + 44 && t < 120) {
         const wideAhead = G.craters.some(c => c.w > 18 && c.x > G.dist + b.x && c.x - G.dist - b.x < 160);
-        if (land > b.x + 17 && !wideAhead) inp.left = true; else inp.right = true;
+        if (land > b.x + 30 && !wideAhead) inp.left = true; else inp.right = true;
       }
     }
     return inp;
@@ -627,7 +627,8 @@ const Game = (() => {
     if (inp.right) G.speed = Math.min(SPEED_MAX, G.speed + 0.02);
     else if (inp.left) G.speed = Math.max(SPEED_MIN, G.speed - 0.02);
     else G.speed += (SPEED_BASE - G.speed) * 0.02;
-    const tx = 40 + (G.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN) * 72;
+    const maxX = Math.min(175, W * 0.62);
+    const tx = 40 + (G.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN) * (maxX - 40);
     b.x += (tx - b.x) * 0.05;
     G.dist += G.speed;
     G.segFrames++;
@@ -659,7 +660,7 @@ const Game = (() => {
     updateObstacles();
     updateWaves();
     updateUfos();
-    updateBombs();
+    updateBombs(G.speed);
     updateShells();
     updateParticles(G.speed);
     collide();
@@ -767,10 +768,13 @@ const Game = (() => {
       u.vy = clamp((u.vy + (u.ty - u.y) * acc) * damp, -vmax, vmax);
       u.x += u.vx; u.y += u.vy + Math.sin(u.t * 0.12) * 0.25;
       if (--u.bombCd <= 0) {
-        if (Math.abs(u.x - (G.buggy.x + 18)) < 70 && G.bombs.length < maxBombs && G.state === 'play') {
+        if (u.aimErr === undefined) u.aimErr = (Math.random() * 2 - 1) * (70 - 45 * dd);
+        const landX = u.x + (u.vx * 0.25 - G.speed) * fallTime(GROUND_Y - u.y - u.h / 2) + u.aimErr;
+        if (Math.abs(landX - (G.buggy.x + 18)) < 30 && G.bombs.length < maxBombs && G.state === 'play') {
           const scatter = (Math.random() - 0.5) * (1 - dd) * 0.8;
-          G.bombs.push({ x: u.x, y: u.y + u.h / 2, vx: u.vx * 0.35 + scatter, vy: 0.5, crater: u.type === 2 });
+          G.bombs.push({ x: u.x, y: u.y + u.h / 2, vx: u.vx * 0.25 + scatter * 0.6, vy: 0.25, crater: u.type === 2 });
           AudioSys.sfx.bomb();
+          u.aimErr = undefined;
           u.bombCd = (u.type === 3 ? 45 : 70) + Math.random() * (120 - 60 * dd);
         } else u.bombCd = 8;
       }
@@ -779,10 +783,16 @@ const Game = (() => {
     G.ufos = G.ufos.filter(u => !u.dead);
   }
 
-  function updateBombs() {
+  // Frames for a bomb to fall a given height (vy0 0.25, gravity 0.02, terminal 1.2).
+  function fallTime(d) {
+    const accelFrames = (1.2 - 0.25) / 0.02, accelDist = 0.25 * accelFrames + 0.01 * accelFrames * accelFrames;
+    return d <= accelDist ? (-0.25 + Math.sqrt(0.0625 + 0.04 * d)) / 0.02 : accelFrames + (d - accelDist) / 1.2;
+  }
+
+  function updateBombs(scroll = 0) {
     for (const bm of G.bombs) {
-      bm.vy = Math.min(2.4, bm.vy + 0.04);
-      bm.x += bm.vx; bm.y += bm.vy;
+      bm.vy = Math.min(1.2, bm.vy + 0.02);
+      bm.x += bm.vx - scroll; bm.y += bm.vy;
       const gy = surfaceAt(bm.x + G.dist);
       if (bm.y >= gy - 1) {
         bm.dead = true;
