@@ -1126,16 +1126,18 @@ const Game = (() => {
     circle(18.4, -7.5, 0.95, '#fff2c2');
   }
 
-  function drawBuggyAt(bx, rearB, midB, frontB, ang, air, t = G.frame) {
+  function drawBuggyAt(bx, rearB, midB, frontB, ang, air, t = G.frame, groundY = null) {
     const hang = air ? 1 : 0;
     const ry = rearB - 5, fy = frontB - 5, axle = (ry + fy) / 2;
     const tilt = Math.atan2(fy - ry, 26), cos = Math.cos(tilt), sin = Math.sin(tilt);
     const cx = bx + 18;
     const toW = (lx, ly) => [cx + lx * cos - ly * sin, axle + lx * sin + ly * cos];
     const wheels = [[bx + 5, ry + hang], [bx + 18, clamp(midB - 5, axle - 2, axle + 2) + hang], [bx + 31, fy + hang]];
-    // Soft contact shadow.
-    ctx.fillStyle = 'rgba(40,18,6,0.35)';
-    ctx.beginPath(); ctx.ellipse(cx, Math.max(rearB, frontB) + 0.3, 19, 1.3, 0, 0, TAU); ctx.fill();
+    // Shadow stays on the ground; it shrinks and fades as the buggy rises.
+    const gy = groundY ?? Math.max(rearB, frontB);
+    const lift = clamp((gy - Math.max(rearB, frontB)) / 45, 0, 1);
+    ctx.fillStyle = `rgba(40,18,6,${0.38 * (1 - lift * 0.5)})`;
+    ctx.beginPath(); ctx.ellipse(cx, gy + 0.3, 19 * (1 - lift * 0.45), 1.3 * (1 - lift * 0.3), 0, 0, TAU); ctx.fill();
     ctx.strokeStyle = '#2d343e'; ctx.lineWidth = 1.3;
     [[-13, -3], [0, -3], [13, -3]].forEach(([lx, ly], i) => {
       const [ax, ay] = toW(lx, ly);
@@ -1153,7 +1155,7 @@ const Game = (() => {
 
   function drawBuggy() {
     const b = G.buggy;
-    drawBuggyAt(b.x, wheelBase(0), wheelBase(1), wheelBase(2), (G.dist + b.x) / 5, b.air);
+    drawBuggyAt(b.x, wheelBase(0), wheelBase(1), wheelBase(2), (G.dist + b.x) / 5, b.air, G.frame, surfaceAt(G.dist + b.x + 18));
   }
 
   function drawMiniBuggy(x, y, s) {
