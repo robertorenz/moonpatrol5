@@ -46,8 +46,11 @@ Touch devices get on-screen buttons.
   tanks that fire along the ground
 - Three UFO types: saucers, crater-blasting orange pods, and diving darts
 - Beginner course A–Z, then the harder Champion course
-- Checkpoints at E, J, O, T and Z, each showing your time, the average time, the top record
-  and a bonus. Losing a buggy restarts you at the last checkpoint.
+- Checkpoints at E, J, O, T and Z: the action stops, enemies retreat, and the buggy rolls to a
+  halt at the signpost and hops under fireworks while a victory fanfare plays. A slim
+  "HOORAY!" banner at the top shows your time, the average time, the top record and a bonus
+  that counts up. Then it's "GO!" and the music restarts. Reaching Z plays a longer
+  celebration before the Champion course. Losing a buggy restarts you at the last checkpoint.
 - Warning lamps for air attack, ground attack and mines
 - Extra buggies at 10,000, 30,000 and 50,000 points
 - Attract mode (title, score table, autopilot demo, high scores), with a top-5 high-score

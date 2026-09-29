@@ -71,6 +71,29 @@ const AudioSys = (() => {
     extra() { if (!ok()) return; arp([79, 83, 86, 91, 86, 91], 0.06, 0.08); },
     start() { if (!ok()) return; arp([67, 72, 76, 79, 0, 76, 79, 79], 0.13, 0.09, 'square', 1.1); },
     gameover() { if (!ok()) return; arp([72, 0, 67, 0, 64, 60], 0.18, 0.09, 'triangle', 1.4); },
+    tick() { if (!ok()) return; tone({ f0: 1760, dur: 0.035, vol: 0.035 }); },
+    pop() { if (!ok()) return; noise({ dur: 0.25, vol: 0.18, f0: 3000, f1: 400, type: 'bandpass', q: 0.6 }); tone({ type: 'sine', f0: 1200 + Math.random() * 800, f1: 300, dur: 0.3, vol: 0.03 }); },
+    go() { if (!ok()) return; tone({ f0: 400, f1: 1300, dur: 0.22, vol: 0.08 }); tone({ type: 'triangle', f0: 200, f1: 650, dur: 0.22, vol: 0.12 }); },
+    // Original victory fanfare: [midi, start step, length in steps].
+    fanfare(final) {
+      if (!ok()) return;
+      const S = 0.12, t0 = ac.currentTime + 0.02;
+      const lead = [[67, 0, 1], [72, 1, 1], [76, 2, 1], [79, 3, 2], [76, 5, 1], [79, 6, 1], [84, 7, 5]];
+      const harm = [[64, 3, 2], [72, 7, 5], [76, 7, 5]];
+      const bass = [[48, 0, 3], [43, 3, 2], [48, 5, 2], [36, 7, 5]];
+      if (final) {
+        lead.push([81, 13, 1], [79, 14, 1], [77, 15, 1], [76, 16, 1], [74, 17, 1], [76, 18, 1], [79, 19, 2], [84, 21, 7]);
+        harm.push([72, 19, 2], [76, 21, 7], [79, 21, 7]);
+        bass.push([41, 13, 3], [43, 16, 3], [48, 19, 2], [36, 21, 7]);
+      }
+      for (const [n, st, len] of lead) tone({ f0: midi(n), dur: len * S * 0.95, vol: 0.1, t: t0 + st * S, attack: 0.01 });
+      for (const [n, st, len] of harm) tone({ type: 'triangle', f0: midi(n), dur: len * S * 0.95, vol: 0.12, t: t0 + st * S, attack: 0.01 });
+      for (const [n, st, len] of bass) tone({ type: 'triangle', f0: midi(n), dur: len * S * 0.9, vol: 0.35, t: t0 + st * S });
+      const end = final ? 28 : 12;
+      noise({ dur: 0.5, vol: 0.12, f0: 9000, f1: 3000, t: t0 + 7 * S, type: 'highpass', q: 0.4 });
+      if (final) noise({ dur: 0.7, vol: 0.14, f0: 9000, f1: 3000, t: t0 + 21 * S, type: 'highpass', q: 0.4 });
+      for (let k = 0; k < end; k += 2) tone({ type: 'sine', f0: 150, f1: 45, dur: 0.12, vol: k % 4 ? 0.25 : 0.45, t: t0 + k * S });
+    },
   };
 
   // Original composition — funky minor-key bass with a bright square lead.

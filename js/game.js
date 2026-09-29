@@ -268,7 +268,7 @@ const Game = (() => {
     mode: 'attract', state: 'title', timer: 480, frame: 0, paused: false, demo: false, demoFrames: 0,
     score: 0, hi: 0, lives: 3, nextExtra: 0, course: 0, cp: 0,
     dist: 0, speed: SPEED_BASE, segFrames: 0, genSeg: 0, nextFree: 0, fireAuto: 0, flash: 0, readyMsg: null,
-    theme: 0, prevTheme: 0, themeT: 0, lastDeath: '',
+    theme: 0, prevTheme: 0, themeT: 0, lastDeath: '', goT: 0,
     buggy: null, craters: [], obs: [], shells: [], triggers: [], ufos: [], bombs: [], upshots: [], fshot: null,
     parts: [], texts: [], debris: [], flashes: [], wave: null, panel: null,
   };
@@ -463,10 +463,60 @@ const Game = (() => {
     if (!G.demo && (records[key] === undefined || secs < records[key])) { records[key] = secs; Store.save('lp_records', records); }
     const bonus = 500 + Math.max(0, avg - secs) * 100;
     addScore(bonus);
-    G.panel = { letter: LETTERS[n], secs, avg, rec: records[key] ?? secs, bonus, t: 270, final: n === 25 };
+    const final = n === 25;
+    G.panel = { letter: LETTERS[n], secs, avg, rec: records[key] ?? secs, bonus, shown: 0, t: 0, len: final ? 420 : 300, final };
     G.cp = n; G.segFrames = 0;
     if (n < 25) { G.prevTheme = G.theme; G.theme = themeFor(n); G.themeT = 90; }
-    AudioSys.sfx.checkpoint();
+    // Stop the action: enemies retreat, anything in flight fizzles out harmlessly.
+    G.state = 'checkpoint';
+    for (const u of G.ufos) if (!u.leaving) { u.leaving = true; u.vy = -0.6; }
+    for (const bm of G.bombs) burst(bm.x, bm.y, 6, FIRE, 0.7, false, 0.02, 14);
+    for (const sh of G.shells) burst(sh.x - G.dist, sh.y, 6, FIRE, 0.7, true, 0.02, 14);
+    G.bombs = []; G.shells = []; G.wave = null; G.fshot = null;
+    AudioSys.stopMusic();
+    AudioSys.sfx.fanfare(final);
+  }
+
+  const FIREWORK = ['#ffd166', '#5fd3f3', '#ff6b6b', '#7ee07a', '#ffffff', '#ffb020'];
+  function firework(x, y) {
+    const c = FIREWORK[Math.floor(Math.random() * FIREWORK.length)];
+    for (let i = 0; i < 34; i++) {
+      const a = i / 34 * TAU, v = 1 + Math.random() * 0.5;
+      G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, g: 0.025, life: 40 + Math.random() * 20, max: 55, c, ground: false, floor: false, glow: true, size: 0.9 });
+    }
+    G.flashes.push({ x, y, r: 12, life: 12, max: 12, ground: false });
+    AudioSys.sfx.pop();
+  }
+
+  function updateCheckpoint() {
+    const b = G.buggy, p = G.panel;
+    p.t++;
+    // Roll to a halt, then two little celebratory hops.
+    G.speed = G.speed > 0.05 ? G.speed * 0.93 : 0;
+    G.dist += G.speed;
+    if ((p.t === 70 || p.t === 110) && !b.air) { b.air = true; b.vy = -1.7; b.wv[2] -= 0.8; }
+    if (b.air) {
+      b.vy += GRAV; b.y += b.vy;
+      if (b.y >= 0) { b.y = 0; b.vy = 0; b.air = false; for (let i = 0; i < 3; i++) b.wv[i] += 0.8; AudioSys.sfx.land(); }
+    }
+    updateWheels(b, G.speed);
+    // Bonus counts up once the buggy has stopped.
+    if (p.t > 40 && p.shown < p.bonus) {
+      p.shown = Math.min(p.bonus, p.shown + 20);
+      if (p.t % 3 === 0) AudioSys.sfx.tick();
+    }
+    const fwEnd = p.final ? 360 : 220;
+    if (p.t > 30 && p.t < fwEnd && p.t % (p.final ? 14 : 24) === 0) {
+      firework(30 + Math.random() * (W - 60), HUD_H + 22 + Math.random() * 45);
+    }
+    updateUfos(); updateParticles(G.speed);
+    if (p.t >= p.len) {
+      G.panel = null;
+      if (p.final) { nextCourse(); return; }
+      G.state = 'play'; G.speed = SPEED_MIN; G.goT = 60;
+      AudioSys.sfx.go();
+      AudioSys.startMusic();
+    }
   }
 
   function die(cause = '') {
@@ -534,9 +584,11 @@ const Game = (() => {
       case 'title': case 'points': case 'scores': updateAttract(); break;
       case 'ready': updateReady(); break;
       case 'play': updatePlay(G.demo ? autopilot() : readInput()); break;
+      case 'checkpoint': updateCheckpoint(); break;
       case 'dying': updateDying(); break;
       case 'gameover': updateGameOver(); break;
     }
+    if (G.goT > 0) G.goT--;
     Input.hit = {};
   }
 
@@ -614,13 +666,8 @@ const Game = (() => {
     if (G.state !== 'play') return;
     checkPasses();
     const next = CHECKPOINTS.find(c => c > G.cp);
-    if (next !== undefined && G.dist + b.x + 18 >= letterX(next)) reachCheckpoint(next);
     cleanup();
-    if (G.panel && --G.panel.t <= 0) {
-      const fin = G.panel.final;
-      G.panel = null;
-      if (fin) nextCourse();
-    }
+    if (next !== undefined && G.dist + b.x + 18 >= letterX(next)) reachCheckpoint(next);
     if (G.demo && ++G.demoFrames > 60 * 45) toAttract('scores');
   }
 
@@ -1395,6 +1442,32 @@ const Game = (() => {
     text(value, cx + 70, y, { size: 6.5, color: vc, align: 'right', weight: 700 });
   }
 
+  function drawCheckpointBanner(p, cx) {
+    const slide = clamp(p.t / 18, 0, 1), out = clamp((p.len - p.t) / 18, 0, 1);
+    const k = Math.min(slide, out), y = HUD_H + 3 - (1 - k) * 36;
+    const w = Math.min(W - 16, 300);
+    ctx.globalAlpha = k;
+    rrect(cx - w / 2, y, w, 33, 5);
+    const g = ctx.createLinearGradient(0, y, 0, y + 33);
+    g.addColorStop(0, 'rgba(10,24,52,0.78)'); g.addColorStop(1, 'rgba(4,10,24,0.78)');
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,190,70,0.9)'; ctx.lineWidth = 0.6; ctx.stroke();
+    const pulse = 1 + Math.sin(p.t * 0.25) * 0.04;
+    const head = p.final ? 'COURSE COMPLETE — HOORAY!' : 'POINT ' + p.letter + ' — HOORAY!';
+    ctx.save(); ctx.translate(cx, y + 10); ctx.scale(pulse, pulse);
+    text(head, 0, 0, { size: 10, color: '#ffb020', align: 'center', weight: 900, base: 'middle', shadow: 4 });
+    ctx.restore();
+    const stats = [['TIME', p.secs, '#39c6f0'], ['AVERAGE', p.avg, '#39c6f0'], ['RECORD', p.rec, '#39c6f0'],
+      [p.secs <= p.avg ? 'GOOD BONUS' : 'BONUS', p.shown, '#ff6b6b']];
+    const colW = (w - 16) / stats.length;
+    stats.forEach(([label, val, col], i) => {
+      const x = cx - w / 2 + 8 + colW * (i + 0.5);
+      text(label, x, y + 19, { size: 4.6, color: col, align: 'center', weight: 700 });
+      text(String(val), x, y + 25, { size: 6.2, color: i === 3 ? '#ffd166' : '#f5f7fa', align: 'center', weight: 900 });
+    });
+    ctx.globalAlpha = 1;
+  }
+
   function drawOverlays() {
     const blink = (G.frame >> 4) & 1, cx = W / 2;
     if (G.state === 'ready') {
@@ -1403,15 +1476,12 @@ const Game = (() => {
       text('POINT ' + LETTERS[G.cp], cx, 89, { size: 8, color: '#ffb020', align: 'center', weight: 900, shadow: 2 });
       if (blink) text('GET READY', cx, 104, { size: 6.5, color: '#f5f7fa', align: 'center' });
     }
-    if (G.panel) {
-      const p = G.panel;
-      panel(cx - 86, 50, 172, p.final ? 86 : 76);
-      text('POINT ' + p.letter, cx, 56, { size: 12, color: '#ffb020', align: 'center', weight: 900, shadow: 3 });
-      row('YOUR TIME', String(p.secs), 76, '#39c6f0', '#f5f7fa', cx);
-      row('AVERAGE TIME', String(p.avg), 86, '#39c6f0', '#f5f7fa', cx);
-      row('TOP RECORD', String(p.rec), 96, '#39c6f0', '#f5f7fa', cx);
-      row(p.secs <= p.avg ? 'GOOD BONUS' : 'BONUS', String(p.bonus), 109, '#ff5f57', '#ffb020', cx);
-      if (p.final && blink) text('COURSE COMPLETE!', cx, 123, { size: 7, color: '#34d399', align: 'center', weight: 900 });
+    if (G.panel) drawCheckpointBanner(G.panel, cx);
+    if (G.goT > 0 && G.state === 'play') {
+      ctx.globalAlpha = clamp(G.goT / 30, 0, 1);
+      const s = 16 + (60 - G.goT) * 0.15;
+      text('GO!', cx, 100, { size: s, color: '#34d399', align: 'center', weight: 900, base: 'middle', shadow: 5 });
+      ctx.globalAlpha = 1;
     }
     if (G.state === 'gameover') {
       panel(cx - 66, 82, 132, 32);
@@ -1480,7 +1550,7 @@ const Game = (() => {
     if (!BG.groundPat) return;
     ctx.setTransform(SX, 0, 0, SY, 0, 0);
     ctx.imageSmoothingEnabled = true;
-    const field = ['ready', 'play', 'dying', 'gameover'].includes(G.state);
+    const field = ['ready', 'play', 'checkpoint', 'dying', 'gameover'].includes(G.state);
     drawSky();
     drawLayer(BG.mountains, 512, MH, 0.12, MOUNT_Y);
     drawNear();
@@ -1540,7 +1610,7 @@ const Game = (() => {
     _state: () => G,
     _tick(n = 1, auto = false) {
       for (let i = 0; i < n; i++) {
-        if (auto && G.state === 'play') { G.frame++; if (G.themeT > 0) G.themeT--; if (G.flash > 0) G.flash--; updatePlay(autopilot()); } else step();
+        if (auto && G.state === 'play') { G.frame++; if (G.themeT > 0) G.themeT--; if (G.flash > 0) G.flash--; if (G.goT > 0) G.goT--; updatePlay(autopilot()); } else step();
       }
       render();
       return { death: G.lastDeath, state: G.state, letter: LETTERS[currentLetter()], score: G.score, lives: G.lives, cp: LETTERS[G.cp], course: G.course, ufos: G.ufos.length };
