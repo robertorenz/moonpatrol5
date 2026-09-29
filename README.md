@@ -1,12 +1,13 @@
 # Lunar Patrol
 
-A browser remake of the classic 1982 lunar-buggy arcade game. It recreates the original's
-feel: a six-wheeled patrol buggy with independently bouncing wheels, multi-layer parallax
-scrolling, and a single fire button that shoots **forward and upward at once**. The course
-runs **A to Z** with timed checkpoints.
+A high-resolution browser remake of the classic 1982 lunar-buggy arcade game. It keeps the
+original's gameplay: a six-wheeled patrol buggy with independent suspension that tilts over
+rolling terrain, layered parallax scenery, and a single fire button that shoots **forward and
+upward at once**. The course runs **A to Z** with timed checkpoints.
 
-All graphics, sound effects and music are original, generated in code. The game uses no
-copyrighted assets.
+Everything is drawn as smooth vector graphics at your display's native resolution, and the view
+fills the whole window, widescreen included. All graphics, sound effects and music are original
+and generated in code. The game uses no copyrighted assets.
 
 ## Running
 
@@ -34,8 +35,13 @@ Touch devices get on-screen buttons.
 
 ## Features
 
-- Native 256×224 arcade resolution with crisp integer scaling and optional CRT scanlines
-- Parallax layers: star field, blue mountains, green hills with a lunar colony, scrolling ground
+- Resolution-independent vector rendering (sharp on 4K and high-DPI screens)
+- **View: Fill screen** widens the playfield to fit any window shape; **View: Arcade 4:3**
+  keeps the original screen shape. Tanks and boulders activate at arcade-screen distance, so
+  the gameplay is the same in both views. There's also an optional CRT overlay.
+- Parallax layers: twinkling star field, icy blue mountain ranges, then green hills or a lunar
+  city skyline (they alternate between checkpoints), and rolling cratered ground
+- Buggy with suspension struts, rolling wheels and body tilt over bumps, jumps and landings
 - Hazards: craters (small and wide), rocks (big ones split in two), rolling boulders, mines,
   tanks that fire along the ground
 - Three UFO types: saucers, crater-blasting orange pods, and diving darts
@@ -53,15 +59,13 @@ Touch devices get on-screen buttons.
 ```
 index.html        page shell, modals, touch controls
 css/style.css     page styling
-js/font.js        5x7 bitmap arcade font
-js/sprites.js     pixel-art sprites (built at load time)
 js/audio.js       WebAudio SFX + music sequencer
-js/game.js        simulation, level generation, rendering
-js/ui.js          modal dialogs, input mapping, scaling, preferences
+js/game.js        simulation, level generation, vector renderer
+js/ui.js          modal dialogs, input mapping, resolution/view scaling, preferences
 ```
 
 ## Testing hook
 
 `Game._tick(frames, autopilot)` advances the simulation synchronously, and `Game._state()`
 exposes the internal state. The level generator was checked with the built-in autopilot,
-which clears the whole Beginner course.
+which clears the whole Beginner course without losing a buggy.

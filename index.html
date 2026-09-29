@@ -7,11 +7,11 @@
   <meta name="description" content="A side-scrolling lunar buggy arcade game in the spirit of the classic 1982 coin-op.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Orbitron:wght@500;700;900&family=Press+Start+2P&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <div class="brand">
       <span class="logo-dot" aria-hidden="true"></span>
       <h1>LUNAR PATROL</h1>
@@ -21,46 +21,18 @@
       <button id="btnStart" class="btn primary">New Game</button>
       <button id="btnPause" class="btn">Pause</button>
       <button id="btnSound" class="btn" aria-pressed="true">Sound: On</button>
-      <button id="btnCrt" class="btn">Scanlines: On</button>
+      <button id="btnCrt" class="btn">CRT: Off</button>
+      <button id="btnView" class="btn">View: Fill screen</button>
       <button id="btnScores" class="btn">High Scores</button>
       <button id="btnHelp" class="btn">How to Play</button>
       <button id="btnFull" class="btn">Fullscreen</button>
     </nav>
   </header>
 
-  <main class="stage">
-    <section class="cabinet" id="cabinet" aria-label="Game screen">
-      <div class="screen-wrap crt" id="screenWrap">
-        <canvas id="screen" width="256" height="224" tabindex="0"></canvas>
-      </div>
-    </section>
-
-    <aside class="panel">
-      <div class="card">
-        <h3>Controls</h3>
-        <ul class="keys">
-          <li><span>Speed</span><span><kbd>&larr;</kbd> <kbd>&rarr;</kbd></span></li>
-          <li><span>Jump</span><span><kbd>&uarr;</kbd> <kbd>Space</kbd> <kbd>Z</kbd></span></li>
-          <li><span>Fire</span><span><kbd>X</kbd> <kbd>Ctrl</kbd></span></li>
-          <li><span>Start</span><span><kbd>Enter</kbd></span></li>
-          <li><span>Pause</span><span><kbd>P</kbd> <kbd>Esc</kbd></span></li>
-          <li><span>Sound</span><span><kbd>M</kbd></span></li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>Mission</h3>
-        <p>Cross the moon from <b>A</b> to <b>Z</b>. One fire button shoots <b>forward and upward at once</b>.</p>
-        <p>Beat the average time between checkpoints <b>E&nbsp;J&nbsp;O&nbsp;T&nbsp;Z</b> for a bonus. Finish the Beginner course to unlock the Champion course.</p>
-      </div>
-      <div class="card">
-        <h3>Warning lamps</h3>
-        <ul class="lamps">
-          <li><span class="dot red"></span>Air attack</li>
-          <li><span class="dot amber"></span>Tanks or boulders ahead</li>
-          <li><span class="dot green"></span>Mine field ahead</li>
-        </ul>
-      </div>
-    </aside>
+  <main class="stage" id="stage">
+    <div class="screen-wrap" id="screenWrap">
+      <canvas id="screen" width="256" height="224" tabindex="0" aria-label="Game screen"></canvas>
+    </div>
   </main>
 
   <div class="touch" aria-hidden="true">
@@ -83,8 +55,6 @@
     </div>
   </div>
 
-  <script src="js/font.js"></script>
-  <script src="js/sprites.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/game.js"></script>
   <script src="js/ui.js"></script>

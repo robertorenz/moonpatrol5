@@ -189,9 +189,9 @@ const UI = (() => {
   }
 
   function setCrt(on) {
-    prefs.crt = on;
+    prefs.crtHD = on;
     $('screenWrap').classList.toggle('crt', on);
-    $('btnCrt').textContent = on ? 'Scanlines: On' : 'Scanlines: Off';
+    $('btnCrt').textContent = on ? 'CRT: On' : 'CRT: Off';
     savePrefs();
   }
 
@@ -204,11 +204,11 @@ const UI = (() => {
     else show({ heading: 'Nothing to pause', html: '<p class="lead">Start a game with <kbd>Enter</kbd> first, then pause any time with <kbd>P</kbd> or <kbd>Esc</kbd>.</p>', buttons: [{ label: 'OK', primary: true }] });
   });
   $('btnSound').addEventListener('click', () => { AudioSys.init(); toggleSound(); });
-  $('btnCrt').addEventListener('click', () => setCrt(!prefs.crt));
+  $('btnCrt').addEventListener('click', () => setCrt(!prefs.crtHD));
   $('btnScores').addEventListener('click', () => scoresDialog());
   $('btnHelp').addEventListener('click', helpDialog);
   $('btnFull').addEventListener('click', () => {
-    const el = $('cabinet');
+    const el = $('stage');
     if (document.fullscreenElement) document.exitFullscreen();
     else if (el.requestFullscreen) el.requestFullscreen().catch(() => {
       show({ heading: 'Fullscreen unavailable', html: '<p class="lead">Your browser blocked fullscreen mode for this page.</p>', buttons: [{ label: 'OK', primary: true }] });
@@ -217,29 +217,43 @@ const UI = (() => {
   $('btnStart').addEventListener('click', () => { AudioSys.init(); Game.startGame(); $('screen').focus(); });
 
   // ------------------------------------------------------------- scaling
+  // The game renders natively at the display's resolution. 'fill' widens the view to the
+  // window's shape; 'arcade' keeps the original 4:3 screen shape.
+  const VIEWS = { fill: 'View: Fill screen', arcade: 'View: Arcade 4:3' };
+  let fitQueued = false;
   function fit() {
-    const canvas = $('screen');
-    const full = document.fullscreenElement;
-    const aside = window.innerWidth > 1100 && !full ? 340 : 0;
-    const touchH = document.body.classList.contains('touch-ui') && !full ? 150 : 0;
-    const availW = Math.max(256, window.innerWidth - aside - (full ? 40 : 80));
-    const availH = Math.max(224, window.innerHeight - (full ? 40 : 150) - touchH);
-    let s = Math.min(availW / 256, availH / 224);
-    if (s >= 2) s = Math.floor(s);
-    s = Math.max(1, s);
-    canvas.style.width = Math.round(256 * s) + 'px';
-    canvas.style.height = Math.round(224 * s) + 'px';
-    $('screenWrap').style.setProperty('--px', s + 'px');
+    const canvas = $('screen'), stage = $('stage');
+    const availW = Math.max(320, stage.clientWidth);
+    const availH = Math.max(240, stage.clientHeight);
+    const view = VIEWS[prefs.view] ? prefs.view : 'fill';
+    let w = availW, h = availH;
+    if (view === 'arcade' || availW / availH < 256 / 224) { h = Math.min(availH, availW * 3 / 4); w = h * 4 / 3; }
+    if (view === 'fill' && w / h > 460 / 224) w = h * 460 / 224;
+    w = Math.floor(w); h = Math.floor(h);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const scale = Math.min(dpr, 3400 / w);
+    Game.resize(Math.round(w * scale), Math.round(h * scale), view === 'fill' && w / h >= 256 / 224 ? 'fill' : 'arcade');
+    $('screenWrap').style.setProperty('--px', (h / 224) + 'px');
+    $('btnView').textContent = VIEWS[view];
   }
+  const queueFit = () => { if (fitQueued) return; fitQueued = true; requestAnimationFrame(() => { fitQueued = false; fit(); }); };
+
+  $('btnView').addEventListener('click', () => {
+    prefs.view = prefs.view === 'arcade' ? 'fill' : 'arcade';
+    savePrefs(); fit();
+  });
 
   if (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window) document.body.classList.add('touch-ui');
-  window.addEventListener('resize', fit);
-  document.addEventListener('fullscreenchange', fit);
+  window.addEventListener('resize', queueFit);
+  new ResizeObserver(queueFit).observe($('stage'));
+  document.addEventListener('fullscreenchange', queueFit);
   fit();
 
   AudioSys.setMuted(!!prefs.muted);
   $('btnSound').textContent = prefs.muted ? 'Sound: Off' : 'Sound: On';
-  setCrt(prefs.crt !== false);
+  setCrt(prefs.crtHD === true);
 
   return { show, close, isOpen: () => open };
 })();
