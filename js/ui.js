@@ -2,6 +2,10 @@
 /* Page chrome: modal dialogs, keyboard/touch input, scaling and preferences. */
 const UI = (() => {
   const $ = id => document.getElementById(id);
+  // Two engines share the screen: the high-resolution remaster and the pixel-art classic.
+  const ENGINES = { remastered: Game, classic: Classic };
+  const MODE_LABELS = { remastered: 'Mode: Remastered', classic: 'Mode: Classic' };
+  let E = Game;
   const modal = $('modal'), mTitle = $('modalTitle'), mBody = $('modalBody'), mActions = $('modalActions');
   let open = false, dismissible = true, onClose = null, pausedByModal = false;
 
@@ -21,7 +25,7 @@ const UI = (() => {
       mActions.appendChild(el);
     });
     dismissible = canDismiss; onClose = closed;
-    if (Game.inGame() && !Game.isPaused()) { Game.setPaused(true); pausedByModal = true; }
+    if (E.inGame() && !E.isPaused()) { E.setPaused(true); pausedByModal = true; }
     modal.hidden = false; open = true;
     requestAnimationFrame(() => {
       const target = focus ? mBody.querySelector(focus) : mActions.querySelector('[data-primary]');
@@ -33,7 +37,7 @@ const UI = (() => {
     if (!open) return;
     modal.hidden = true; open = false;
     const cb = onClose; onClose = null;
-    if (pausedByModal) { pausedByModal = false; Game.setPaused(false); }
+    if (pausedByModal) { pausedByModal = false; E.setPaused(false); }
     if (cb && !silent) cb();
     updatePauseButton();
   }
@@ -42,13 +46,13 @@ const UI = (() => {
 
   // ------------------------------------------------------------- dialogs
   function pauseMenu() {
-    if (!Game.inGame()) return;
+    if (!E.inGame()) return;
     show({
       heading: 'Paused',
       html: '<p class="lead">Your patrol is on hold. The moon will wait.</p>',
       buttons: [
-        { label: 'Quit to title', action: () => { close(true); Game.quitToTitle(); } },
-        { label: 'Restart', action: () => { close(true); Game.startGame(); } },
+        { label: 'Quit to title', action: () => { close(true); E.quitToTitle(); } },
+        { label: 'Restart', action: () => { close(true); E.startGame(); } },
         { label: 'Resume', primary: true },
       ],
     });
@@ -83,6 +87,7 @@ const UI = (() => {
             </table>
           </div>
         </div>
+        <p class="lead">Use the <b>Mode</b> button to switch between <b>Classic</b> (a pixel-art recreation of the 1982 arcade game) and <b>Remastered</b>. Each mode keeps its own high scores.</p>
         <h4>Field guide</h4>
         <ul class="guide">
           <li><b>Craters</b> can only be jumped. Wide ones need speed.</li>
@@ -98,7 +103,7 @@ const UI = (() => {
   }
 
   function scoresTable(highlight) {
-    const rows = Game.getScores().map((s, i) =>
+    const rows = E.getScores().map((s, i) =>
       `<tr class="${i === highlight ? 'hl' : ''}"><td>${i + 1}</td><td>${esc(s.name)}</td><td>${s.score.toLocaleString()}</td></tr>`).join('');
     return `<table class="scores"><thead><tr><th>#</th><th>Pilot</th><th>Score</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
@@ -108,8 +113,8 @@ const UI = (() => {
   }
 
   function gameOver(score) {
-    const again = { label: 'Play again', primary: true, action: () => { close(true); Game.startGame(); } };
-    if (!Game.qualifies(score)) {
+    const again = { label: 'Play again', primary: true, action: () => { close(true); E.startGame(); } };
+    if (!E.qualifies(score)) {
       show({
         heading: 'Game Over',
         html: `<p class="lead">Final score <b class="big">${score.toLocaleString()}</b></p>${scoresTable(-1)}`,
@@ -128,8 +133,8 @@ const UI = (() => {
         label: 'Save score', primary: true, action: () => {
           const v = $('initials').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
           if (!v) { $('initErr').hidden = false; return; }
-          Game.saveScore(v, score);
-          const idx = Game.getScores().findIndex(s => s.name === v && s.score === score);
+          E.saveScore(v, score);
+          const idx = E.getScores().findIndex(s => s.name === v && s.score === score);
           close(true);
           show({ heading: 'High Scores', html: scoresTable(idx), buttons: [{ label: 'Close' }, again] });
         },
@@ -139,6 +144,53 @@ const UI = (() => {
     input.addEventListener('input', () => { input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); });
   }
   Game.onGameOver = gameOver;
+  Classic.onGameOver = gameOver;
+
+  // ------------------------------------------------------------- game mode
+  function setMode(m) {
+    const next = ENGINES[m] ? m : 'remastered';
+    if (E !== ENGINES[next]) {
+      E.quitToTitle();
+      E.setActive(false);
+      AudioSys.stopMusic();
+      E = ENGINES[next];
+      E.quitToTitle();
+      E.setActive(true);
+    }
+    prefs.mode = next; savePrefs();
+    document.body.dataset.mode = next;
+    $('btnMode').textContent = MODE_LABELS[next];
+    fit();
+  }
+
+  function modeMenu() {
+    const cur = prefs.mode === 'classic' ? 'classic' : 'remastered';
+    const card = (mode, badge, title, desc) => `
+      <button class="mode-card${mode === cur ? ' current' : ''}" data-mode="${mode}">
+        <span class="mode-art ${mode}" aria-hidden="true"></span>
+        <span class="mode-text">
+          <span class="mode-badge">${badge}</span>
+          <span class="mode-title">${title}</span>
+          <span class="mode-desc">${desc}</span>
+        </span>
+      </button>`;
+    show({
+      heading: 'Choose your patrol',
+      html: `<p class="lead">Pick how you want to play. You can switch any time with the <b>Mode</b> button.</p>
+        <div class="mode-cards">
+          ${card('classic', 'Arcade 1982', 'Classic', 'A faithful pixel-art recreation of the original coin-op: the pink buggy, blue mountains, green hills, chip-style music and the original HUD, scaled crisp to your screen.')}
+          ${card('remastered', 'HD remaster', 'Remastered', 'The modern take: smooth vector graphics at native resolution, checkpoint celebrations, fireworks and a full soundtrack.')}
+        </div>`,
+      buttons: [],
+      focus: '.mode-card.current',
+    });
+    mBody.querySelectorAll('.mode-card').forEach(b => b.addEventListener('click', () => {
+      AudioSys.init();
+      close(true);
+      setMode(b.dataset.mode);
+      $('screen').focus();
+    }));
+  }
 
   // ------------------------------------------------------------- controls
   const KEYMAP = {
@@ -160,16 +212,16 @@ const UI = (() => {
     if (e.code === 'KeyP' || e.code === 'Escape') { e.preventDefault(); pauseMenu(); return; }
     if (e.code === 'KeyM') { toggleSound(); return; }
     const a = KEYMAP[e.code];
-    if (a) { e.preventDefault(); if (!e.repeat) Game.press(a); }
+    if (a) { e.preventDefault(); if (!e.repeat) E.press(a); }
   });
-  document.addEventListener('keyup', e => { const a = KEYMAP[e.code]; if (a) Game.release(a); });
-  window.addEventListener('blur', () => { Game.releaseAll(); if (Game.inGame() && !open) pauseMenu(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden && Game.inGame() && !open) pauseMenu(); });
+  document.addEventListener('keyup', e => { const a = KEYMAP[e.code]; if (a) E.release(a); });
+  window.addEventListener('blur', () => { E.releaseAll(); if (E.inGame() && !open) pauseMenu(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && E.inGame() && !open) pauseMenu(); });
 
   document.querySelectorAll('[data-action]').forEach(btn => {
     const a = btn.dataset.action;
-    const down = e => { e.preventDefault(); AudioSys.init(); btn.classList.add('down'); Game.press(a); };
-    const up = e => { e.preventDefault(); btn.classList.remove('down'); Game.release(a); };
+    const down = e => { e.preventDefault(); AudioSys.init(); btn.classList.add('down'); E.press(a); };
+    const up = e => { e.preventDefault(); btn.classList.remove('down'); E.release(a); };
     btn.addEventListener('pointerdown', down);
     btn.addEventListener('pointerup', up);
     btn.addEventListener('pointerleave', up);
@@ -200,13 +252,14 @@ const UI = (() => {
   }
 
   $('btnPause').addEventListener('click', () => {
-    if (Game.inGame()) pauseMenu();
+    if (E.inGame()) pauseMenu();
     else show({ heading: 'Nothing to pause', html: '<p class="lead">Start a game with <kbd>Enter</kbd> first, then pause any time with <kbd>P</kbd> or <kbd>Esc</kbd>.</p>', buttons: [{ label: 'OK', primary: true }] });
   });
   $('btnSound').addEventListener('click', () => { AudioSys.init(); toggleSound(); });
   $('btnCrt').addEventListener('click', () => setCrt(!prefs.crtHD));
   $('btnScores').addEventListener('click', () => scoresDialog());
   $('btnHelp').addEventListener('click', helpDialog);
+  $('btnMode').addEventListener('click', modeMenu);
   $('btnFull').addEventListener('click', () => {
     const el = $('stage');
     if (document.fullscreenElement) document.exitFullscreen();
@@ -214,7 +267,7 @@ const UI = (() => {
       show({ heading: 'Fullscreen unavailable', html: '<p class="lead">Your browser blocked fullscreen mode for this page.</p>', buttons: [{ label: 'OK', primary: true }] });
     });
   });
-  $('btnStart').addEventListener('click', () => { AudioSys.init(); Game.startGame(); $('screen').focus(); });
+  $('btnStart').addEventListener('click', () => { AudioSys.init(); E.startGame(); $('screen').focus(); });
 
   // ------------------------------------------------------------- scaling
   // The game renders natively at the display's resolution. 'fill' widens the view to the
@@ -234,7 +287,7 @@ const UI = (() => {
     canvas.style.height = h + 'px';
     const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
     const scale = Math.min(dpr, 3400 / w);
-    Game.resize(Math.round(w * scale), Math.round(h * scale), view === 'fill' && w / h >= 256 / 224 ? 'fill' : 'arcade');
+    E.resize(Math.round(w * scale), Math.round(h * scale), view === 'fill' && w / h >= 256 / 224 ? 'fill' : 'arcade');
     $('screenWrap').style.setProperty('--px', (h / 224) + 'px');
     $('btnView').textContent = VIEWS[view];
   }
@@ -254,6 +307,8 @@ const UI = (() => {
   AudioSys.setMuted(!!prefs.muted);
   $('btnSound').textContent = prefs.muted ? 'Sound: Off' : 'Sound: On';
   setCrt(prefs.crtHD === true);
+  setMode(prefs.mode);
+  modeMenu();
 
   return { show, close, isOpen: () => open };
 })();

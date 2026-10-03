@@ -24,6 +24,7 @@ const Game = (() => {
   const canvas = document.getElementById('screen');
   const ctx = canvas.getContext('2d');
   let SX = 4, SY = 4;                    // device pixels per logical unit
+  let active = true;                     // false while Classic mode owns the screen
 
   // ---------------------------------------------------------------- utilities
   function mulberry32(a) {
@@ -1557,7 +1558,7 @@ const Game = (() => {
   }
 
   function render() {
-    if (!BG.groundPat) return;
+    if (!active || !BG.groundPat) return;
     ctx.setTransform(SX, 0, 0, SY, 0, 0);
     ctx.imageSmoothingEnabled = true;
     const field = ['ready', 'play', 'checkpoint', 'dying', 'gameover'].includes(G.state);
@@ -1597,6 +1598,7 @@ const Game = (() => {
   const DT = 1000 / 60;
   function loop(t) {
     requestAnimationFrame(loop);
+    if (!active) { last = 0; return; }
     if (!last) last = t;
     acc += Math.min(100, t - last);
     last = t;
@@ -1615,6 +1617,7 @@ const Game = (() => {
     setPaused(p) { G.paused = p; AudioSys.setPaused(p); if (p) releaseAll(); },
     isPaused: () => G.paused,
     inGame: () => G.mode === 'game' && G.state !== 'gameover',
+    setActive(a) { active = a; if (!a) { releaseAll(); G.paused = false; } },
     onGameOver: null,
     // Test hooks: inspect state / advance the simulation n frames synchronously.
     _state: () => G,

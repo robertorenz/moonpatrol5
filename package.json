@@ -20,6 +20,6 @@
   "scripts": {
     "start": "node scripts/serve.js",
     "dev": "node scripts/serve.js --open",
-    "check": "node --check js/audio.js && node --check js/game.js && node --check js/ui.js && node --check scripts/serve.js"
+    "check": "node --check js/audio.js && node --check js/game.js && node --check js/classic.js && node --check js/ui.js && node --check scripts/serve.js"
   }
 }

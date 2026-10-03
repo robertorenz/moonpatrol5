@@ -7,8 +7,13 @@ six-wheeled patrol buggy across the lunar surface from point **A** to point **Z*
 craters, blast rocks, and fight off attackers from the sky. As in the original, one fire button
 shoots **forward and upward at once**.
 
-It's plain HTML, CSS and JavaScript with no build step and no dependencies. Everything is drawn
-as vector graphics at your screen's native resolution, and the view fills the whole window.
+It's plain HTML, CSS and JavaScript with no build step and no dependencies. There are two ways
+to play, picked from a menu when the page opens (or any time with the **Mode** button):
+
+- **Classic:** a pixel-art recreation of the 1982 arcade game, with its look, HUD and flow.
+- **Remastered:** smooth vector graphics at your screen's native resolution.
+
+Both fill the whole window.
 
 ## Play
 
@@ -56,7 +61,30 @@ Touch devices get on-screen buttons.
 | ![Checkpoint celebration with fireworks](docs/screenshots/checkpoint.png) | ![Title screen](docs/screenshots/title.png) |
 | **Checkpoint:** stop, celebrate, and collect your time bonus | **Attract mode:** title, score table, demo play and high scores |
 
-## Features
+## Classic mode
+
+![Classic mode: pixel-art buggy driving past the lunar city](docs/screenshots/classic.jpg)
+
+Classic mode recreates the original coin-op as closely as possible:
+
+- **Hand-made pixel sprites** for the six-wheeled pink buggy (each wheel bounces on its own
+  spring), three UFO types, tanks, mines, rocks and rolling boulders, plus pixel explosions.
+- **The original scenery:** black starry sky, blue snow-capped mountains, rolling green hills or
+  the lunar city, and the brown striped ground with black craters. Letter signposts mark every
+  section from A to Z.
+- **The arcade HUD:** 1UP and HI scores, current POINT, section TIME, the three warning lamps
+  and the course progress bar.
+- **Checkpoint report** in the original style: *Time to reach point "E"*, your time, the average
+  time, the top record and the bonus points.
+- **Score advance table**, demonstration play and high-score attract screens.
+- **Chip-style music:** an original bouncy square-wave tune in the style of early-80s arcade
+  sound chips.
+- **Sharp at any size:** sprites are drawn with nearest-neighbour scaling straight onto the
+  full-resolution canvas, so pixels stay crisp while scrolling stays smooth. *Fill screen* widens
+  the playfield to the window; *Arcade 4:3* keeps the original shape.
+- Separate high scores and checkpoint records from Remastered mode.
+
+## Features (Remastered)
 
 - **Arcade gameplay:** a Beginner course A–Z, then a harder Champion course. Checkpoints at
   E, J, O, T and Z have timed bonuses, and losing a buggy restarts you at the last checkpoint.
@@ -96,12 +124,13 @@ package.json      npm scripts: start, dev, check
 scripts/serve.js  zero-dependency static server used by npm start
 css/style.css     page styling
 js/audio.js       WebAudio sound effects, music sequencer, fanfare
-js/game.js        simulation, level generation, vector renderer
-js/ui.js          dialogs, input mapping, resolution/view scaling, preferences
+js/game.js        Remastered mode: simulation, level generation, vector renderer
+js/classic.js     Classic mode: simulation, pixel-art sprites and pixel renderer
+js/ui.js          mode menu, dialogs, input mapping, resolution/view scaling, preferences
 ```
 
-For testing, `Game._tick(frames, autopilot)` advances the simulation synchronously and
-`Game._state()` exposes the internal state. The built-in autopilot was used to check that the
+For testing, `Game._tick(frames, autopilot)` (or `Classic._tick` for Classic mode) advances the
+simulation synchronously and `Game._state()` exposes the internal state. The built-in autopilot was used to check that the
 generated courses have no impossible obstacle layouts.
 
 ## Credits

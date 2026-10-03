@@ -205,3 +205,54 @@ body.touch-ui .touch {
   .grid2 { grid-template-columns: 1fr; }
   .tag { display: none; }
 }
+
+/* ------------------------------------------------------------ mode menu */
+.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 6px; }
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+}
+.mode-card:hover, .mode-card:focus-visible { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 10px 24px rgba(0, 0, 0, .4); outline: none; }
+.mode-card.current { border-color: var(--amber); }
+.mode-art { display: block; height: 92px; position: relative; }
+/* Classic: hard-edged bands like the arcade screen — black sky, blue peaks, green hills, brown ground. */
+.mode-art.classic {
+  image-rendering: pixelated;
+  background:
+    linear-gradient(to bottom, transparent 72%, #e8a45a 72%, #e8a45a 74%, #c47a35 74%),
+    conic-gradient(from 135deg at 20% 62%, #9cff8a 0 1%, #1f9a3f 1% 25%, transparent 25%) 0 0 / 46px 100%,
+    conic-gradient(from 135deg at 50% 38%, #ffffff 0 2%, #4f95e6 2% 25%, transparent 25%) 0 0 / 70px 100%,
+    #000;
+}
+.mode-art.classic::after {
+  content: '';
+  position: absolute;
+  left: 38%; bottom: 25%;
+  width: 34px; height: 9px;
+  background: #f04fb8;
+  box-shadow: 0 -3px 0 -1px #ffa8e2, -4px 6px 0 -2px #d8dde4, 8px 6px 0 -2px #d8dde4, 20px 6px 0 -2px #d8dde4;
+}
+.mode-art.remastered {
+  background:
+    linear-gradient(to bottom, transparent 70%, #eaa864 70%, #a5602b 100%),
+    radial-gradient(120px 46px at 30% 74%, #39a855 0 60%, transparent 62%),
+    radial-gradient(160px 70px at 75% 80%, #2c7a4c 0 60%, transparent 62%),
+    linear-gradient(160deg, transparent 40%, #98c2f0 40%, #3d6db3 60%, transparent 60%),
+    radial-gradient(1px 1px at 20% 20%, #fff 50%, transparent 51%),
+    linear-gradient(#050913, #14264a);
+}
+.mode-text { display: flex; flex-direction: column; gap: 6px; padding: 14px 16px 16px; }
+.mode-badge { align-self: flex-start; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--amber); border: 1px solid rgba(245, 158, 11, .45); border-radius: 999px; padding: 2px 8px; }
+.mode-title { font-family: 'Press Start 2P', monospace; font-size: 13px; color: #fff; }
+.mode-desc { font-size: 13px; line-height: 1.55; color: var(--muted); }
+@media (max-width: 640px) { .mode-cards { grid-template-columns: 1fr; } }
+.modal:has(.mode-cards) { width: min(720px, 100%); }

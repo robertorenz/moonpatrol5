@@ -3,7 +3,6 @@
 const AudioSys = (() => {
   let ac = null, master, sfxBus, musicBus, noiseBuf;
   let muted = false, musicPlaying = false, timerId = null, nextT = 0, step = 0;
-  const STEP = 60 / 150 / 2; // eighth notes at 150 BPM
 
   function init() {
     if (ac) { if (ac.state === 'suspended' && !paused) ac.resume(); return; }
@@ -96,45 +95,79 @@ const AudioSys = (() => {
     },
   };
 
-  // Original composition — funky minor-key bass with a bright square lead.
-  const BASS = {
-    Am: [45, 45, 52, 45, 57, 45, 52, 55],
-    F:  [41, 41, 48, 41, 53, 41, 48, 51],
-    G:  [43, 43, 50, 43, 55, 43, 50, 53],
-    Em: [40, 40, 47, 40, 52, 40, 47, 50],
+  // Original compositions. 'main' is a funky minor-key groove; 'classic' is a bouncy major-key
+  // loop voiced with thin square waves, like an early-80s arcade sound chip.
+  const TUNES = {
+    main: {
+      step: 60 / 150 / 2,
+      bass: {
+        Am: [45, 45, 52, 45, 57, 45, 52, 55],
+        F:  [41, 41, 48, 41, 53, 41, 48, 51],
+        G:  [43, 43, 50, 43, 55, 43, 50, 53],
+        Em: [40, 40, 47, 40, 52, 40, 47, 50],
+      },
+      prog: ['Am', 'F', 'G', 'Am', 'F', 'G', 'Em', 'Am'],
+      lead: [
+        76, 0, 81, 0, 79, 76, 0, 74,   72, 0, -1, 74, 76, -1, 77, 76,
+        74, 0, 71, 0, 74, 79, -1, 0,   76, -1, -1, 0, 72, 74, 76, 0,
+        77, -1, 76, 77, 81, -1, 79, 77, 79, -1, -1, 74, 71, 0, 74, 0,
+        76, -1, 79, -1, 83, -1, 81, 79, 81, -1, -1, -1, 0, 0, 0, 0,
+      ],
+    },
+    classic: {
+      step: 60 / 164 / 2,
+      chip: true,
+      bass: {
+        C: [36, 48, 36, 48, 43, 48, 36, 43],
+        F: [41, 53, 41, 53, 48, 53, 41, 48],
+        G: [43, 55, 43, 55, 50, 55, 43, 50],
+        Am: [45, 57, 45, 57, 52, 57, 45, 52],
+      },
+      prog: ['C', 'C', 'F', 'G', 'C', 'Am', 'F', 'G'],
+      lead: [
+        72, 0, 76, 79, 0, 76, 72, 0,   74, -1, 76, 74, 72, 0, 67, 0,
+        69, 0, 72, 77, 0, 76, 74, 72,  74, -1, -1, 0, 71, 72, 74, 0,
+        76, 0, 79, 84, 0, 79, 76, 0,   81, -1, 79, 76, 72, 0, 76, 0,
+        77, 0, 76, 74, 72, 0, 69, 72,  74, -1, -1, -1, 0, 79, 77, 74,
+      ],
+    },
   };
-  const PROG = ['Am', 'F', 'G', 'Am', 'F', 'G', 'Em', 'Am'];
-  const LEAD = [
-    76, 0, 81, 0, 79, 76, 0, 74,   72, 0, -1, 74, 76, -1, 77, 76,
-    74, 0, 71, 0, 74, 79, -1, 0,   76, -1, -1, 0, 72, 74, 76, 0,
-    77, -1, 76, 77, 81, -1, 79, 77, 79, -1, -1, 74, 71, 0, 74, 0,
-    76, -1, 79, -1, 83, -1, 81, 79, 81, -1, -1, -1, 0, 0, 0, 0,
-  ];
-  const LOOP = LEAD.length;
+  let tune = TUNES.main;
 
   function scheduleStep(i, t) {
+    const T = tune, STEP = T.step, LOOP = T.lead.length;
     const bar = Math.floor(i / 8), s = i % 8;
-    const bn = BASS[PROG[bar]][s];
-    tone({ type: 'triangle', f0: midi(bn), dur: STEP * 0.9, vol: 0.5, t, bus: musicBus });
-    tone({ type: 'square', f0: midi(bn), dur: STEP * 0.45, vol: 0.05, t, bus: musicBus });
-    const ln = LEAD[i];
+    const bn = T.bass[T.prog[bar]][s];
+    if (T.chip) tone({ type: 'square', f0: midi(bn), dur: STEP * 0.7, vol: 0.12, t, bus: musicBus });
+    else {
+      tone({ type: 'triangle', f0: midi(bn), dur: STEP * 0.9, vol: 0.5, t, bus: musicBus });
+      tone({ type: 'square', f0: midi(bn), dur: STEP * 0.45, vol: 0.05, t, bus: musicBus });
+    }
+    const ln = T.lead[i];
     if (ln > 0) {
       let n = 1;
-      while (LEAD[(i + n) % LOOP] === -1) n++;
-      tone({ type: 'square', f0: midi(ln), dur: STEP * n * 0.95, vol: 0.075, t, bus: musicBus, attack: 0.01 });
+      while (T.lead[(i + n) % LOOP] === -1) n++;
+      tone({ type: 'square', f0: midi(ln), dur: STEP * n * 0.92, vol: T.chip ? 0.06 : 0.075, t, bus: musicBus, attack: 0.008 });
+      if (T.chip) tone({ type: 'square', f0: midi(ln) * 1.006, dur: STEP * n * 0.6, vol: 0.025, t: t + 0.012, bus: musicBus });
+    }
+    if (T.chip) {
+      if (s === 0 || s === 4) noise({ dur: 0.09, vol: 0.3, f0: 900, f1: 120, t, bus: musicBus });
+      if (s === 2 || s === 6) noise({ dur: 0.07, vol: 0.18, f0: 5000, f1: 2500, t, bus: musicBus, type: 'bandpass', q: 0.9 });
+      return;
     }
     if (s === 0 || s === 3 || s === 4) tone({ type: 'sine', f0: 150, f1: 45, dur: 0.13, vol: 0.6, t, bus: musicBus });
     if (s === 2 || s === 6) noise({ dur: 0.1, vol: 0.22, f0: 1800, f1: 900, t, bus: musicBus, type: 'bandpass', q: 0.8 });
     noise({ dur: 0.03, vol: s % 2 ? 0.07 : 0.04, f0: 8000, f1: 6000, t, bus: musicBus, type: 'highpass', q: 0.5 });
   }
 
-  function startMusic() {
+  function startMusic(name = 'main') {
     if (!ac || musicPlaying) return;
+    tune = TUNES[name] || TUNES.main;
     musicPlaying = true; step = 0; nextT = ac.currentTime + 0.05;
     timerId = setInterval(() => {
       while (nextT < ac.currentTime + 0.15) {
         if (!muted) scheduleStep(step, nextT);
-        nextT += STEP; step = (step + 1) % LOOP;
+        nextT += tune.step; step = (step + 1) % tune.lead.length;
       }
     }, 30);
   }
