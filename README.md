@@ -65,24 +65,33 @@ Touch devices get on-screen buttons.
 
 ![Classic mode: pixel-art buggy driving past the lunar city](docs/screenshots/classic.jpg)
 
-Classic mode recreates the original coin-op as closely as possible:
+Classic mode recreates the original coin-op as closely as possible. Shapes, colours and layout
+were matched against screenshots of the arcade game, then redrawn at three times its pixel
+resolution so they keep the original look with finer detail:
 
-- **Hand-made pixel sprites** for the six-wheeled pink buggy (each wheel bounces on its own
-  spring), three UFO types, tanks, mines, rocks and rolling boulders, plus pixel explosions.
-- **The original scenery:** black starry sky, blue snow-capped mountains, rolling green hills or
-  the lunar city, and the brown striped ground with black craters. Letter signposts mark every
-  section from A to Z.
-- **The arcade HUD:** 1UP and HI scores, current POINT, section TIME, the three warning lamps
-  and the course progress bar.
-- **Checkpoint report** in the original style: *Time to reach point "E"*, your time, the average
-  time, the top record and the bonus points.
-- **Score advance table**, demonstration play and high-score attract screens.
-- **Chip-style music:** an original bouncy square-wave tune in the style of early-80s arcade
-  sound chips.
-- **Sharp at any size:** sprites are drawn with nearest-neighbour scaling straight onto the
-  full-resolution canvas, so pixels stay crisp while scrolling stays smooth. *Fill screen* widens
-  the playfield to the window; *Arcade 4:3* keeps the original shape.
-- Separate high scores and checkpoint records from Remastered mode.
+- **Sprites:** the magenta moon buggy with its rear anti-air gun, forward cannon and cyan-studded
+  gear wheels; yellow domed saucers; a second saucer type; the tri-orb craft that lobs
+  crater-making grenades; magenta bombs; stepped ochre rocks; rolling boulders; mines; tanks;
+  and the rocket car that charges from behind (jump it). Explosions are spiky red and yellow
+  bursts over grey smoke.
+- **Scenery:** teal mountains with jagged deep-blue shading, then either rolling green hills with
+  dark ridge streaks or the alien city of bulbous green towers, over the peach lunar ground.
+- **A bumpy road:** the surface rolls through long swells and small lumps. Each wheel rides its
+  own shock absorber and the body pitches with the terrain.
+- **Real craters:** the road drops into a ragged bowl with a sunlit far wall showing soil layers,
+  a shadowed near slope, rubble on the floor and ejecta piled on the lips. Drive into one and the
+  buggy nose-dives in before it explodes. Grenades blast fresh, smoking craters.
+- **The arcade HUD:** blue band with the crown high score and 1P score, the cyan POINT and TIME
+  panel with three warning lamps (air attack, mines, attack from behind) and the course map.
+- **Original rules and scoring:** 50 for jumping a hazard, 100 per saucer, rock or bomb, 200 per
+  tri-orb or tank, 50 per boulder, squad bonuses of 500 / 800 / 1,000. Checkpoints pay 1,000
+  plus 100 per second under the average time, and Z adds 5,000. One cannon shell at a time and
+  up to four anti-air shots; cannon shells and tank shells cancel out.
+- **Checkpoint report** in the original style, score advance table, demonstration play and a
+  chip-style soundtrack (an original tune).
+- **Sharp at any size:** sprites are drawn with nearest-neighbour scaling at the display's
+  native resolution. *Fill screen* widens the playfield to the window; *Arcade 4:3* keeps the
+  original shape. High scores and records are kept separately from Remastered mode.
 
 ## Features (Remastered)
 

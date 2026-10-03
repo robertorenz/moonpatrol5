@@ -1,20 +1,38 @@
 'use strict';
-/* Classic mode — a pixel-art recreation of the 1982 coin-op.
-   Sprites are hand-made pixel maps. They are drawn with nearest-neighbour scaling straight onto the
-   full-resolution canvas, so every pixel stays crisp while scrolling and motion stay smooth. */
+/* Classic mode — a recreation of the 1982 coin-op, redrawn as high-resolution pixel art.
+   Shapes and colours follow the arcade original (magenta buggy with gear wheels, yellow saucers,
+   teal-and-blue peaks, green hills, peach ground). Every sprite is built at three pixels per
+   arcade pixel, so it keeps the original look with finer detail, and is drawn with
+   nearest-neighbour scaling at the display's native resolution. */
 const Classic = (() => {
-  const H = 224, HUD_H = 40, GROUND_Y = 184;
+  const H = 224, HUD_H = 40, GROUND_Y = 190;
   let W = 256;
+  const D = 3;                           // sprite pixels per arcade pixel
+  const DB = 2;                          // backdrop pixels per arcade pixel
   const SEG = 600, LEAD = 220;
   const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const CHECKPOINTS = [0, 4, 9, 14, 19, 25];
   const JUMP_V = 2.55, GRAV = 0.1;
   const SPEED_MIN = 0.7, SPEED_MAX = 2.0, SPEED_BASE = 1.15;
   const EXTRA_LIVES = [10000, 30000, 50000];
-  const WHEEL_DX = [1, 12, 23];          // wheel sprite left edges relative to the buggy
+  const WX = [5.5, 15, 27];              // wheel centres, relative to the buggy's left edge
+  const WR = 3.6;                        // wheel radius
   const ENGAGE = 248;                    // hazards act at arcade-screen distance in any view width
   const FONT = '"Press Start 2P", monospace';
+  const TAU = Math.PI * 2;
   const letterX = i => LEAD + i * SEG;
+
+  // Colours sampled from the arcade screen.
+  const C = {
+    sky: '#000000', ink: '#0c0a22',
+    mag: '#c804bc', magHi: '#f25cf0', magLo: '#8a0084',
+    cab: '#08bad6', cabHi: '#9ef2ff', cyan: '#22cdec',
+    teal: '#00a4b8', tealHi: '#5fd6e6', blue: '#0a22ee',
+    green: '#02e162', greenLo: '#02a30a', greenHi: '#9dffb0',
+    peach: '#ffa463', peachHi: '#ffc896', peachLo: '#e48a4c', dirt: '#b8642e',
+    yellow: '#ece418', yellowHi: '#fffaa0', yellowLo: '#b8a800', red: '#e8141c', dome: '#4da1d0', domeHi: '#a8d8f4',
+    white: '#ffffff', smoke: '#c9cfdd',
+  };
 
   const canvas = document.getElementById('screen');
   const ctx = canvas.getContext('2d');
@@ -29,10 +47,36 @@ const Classic = (() => {
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
   }
+  function hash2(i, j) {
+    let n = Math.imul(i | 0, 374761393) + Math.imul(j | 0, 668265263) | 0;
+    n = Math.imul(n ^ n >>> 13, 1274126177);
+    return ((n ^ n >>> 16) >>> 0) / 4294967296;
+  }
+  const smooth = f => f * f * (3 - 2 * f);
+  // Value noise; with period p it wraps seamlessly (used for tiled backdrops).
+  function noise1(x, seed, p = 0) {
+    const i = Math.floor(x), f = x - i, a = p ? ((i % p) + p) % p : i, b = p ? (((i + 1) % p) + p) % p : i + 1;
+    return hash2(a, seed) + (hash2(b, seed) - hash2(a, seed)) * smooth(f);
+  }
+  function noise2(x, y, seed, p = 0) {
+    const i = Math.floor(x), j = Math.floor(y), fx = smooth(x - i), fy = smooth(y - j);
+    const w = k => p ? ((k % p) + p) % p : k;
+    const a = hash2(w(i) + seed * 131, j), b = hash2(w(i + 1) + seed * 131, j);
+    const c = hash2(w(i) + seed * 131, j + 1), d = hash2(w(i + 1) + seed * 131, j + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  }
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   const pad = n => String(n).padStart(6, '0');
-  const pick = (r, list) => list[Math.floor(r() * list.length)];
+  const box = (u, v, x0, y0, x1, y1) => u >= x0 && u < x1 && v >= y0 && v < y1;
+  function inPoly(p, x, y) {
+    let inside = false;
+    for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+      const [xi, yi] = p[i], [xj, yj] = p[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
 
   const Store = {
     load(k, def) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } },
@@ -43,288 +87,328 @@ const Classic = (() => {
     { name: 'LUN', score: 7500 }, { name: 'AZ ', score: 5000 },
   ];
 
-  // ---------------------------------------------------------------- sprite sheets
-  // Each sprite is a list of rows; every character maps to a palette colour ('.' is transparent).
-  function sprite(rows, pal) {
-    const h = rows.length, w = Math.max(...rows.map(r => r.length));
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const x = c.getContext('2d');
-    rows.forEach((row, j) => [...row].forEach((ch, i) => {
-      if (pal[ch]) { x.fillStyle = pal[ch]; x.fillRect(i, j, 1, 1); }
-    }));
-    return c;
+  // ---------------------------------------------------------------- pixel-art builder
+  const RGB = {};
+  function rgb(hex) {
+    if (!RGB[hex]) RGB[hex] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    return RGB[hex];
   }
-  // Procedural pixel sprite: fn(i, j) returns a colour or null.
-  function pixels(w, h, fn) {
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const x = c.getContext('2d');
-    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
-      const col = fn(i, j);
-      if (col) { x.fillStyle = col; x.fillRect(i, j, 1, 1); }
+  // art(w, h, fn): a sprite of w×h arcade pixels at `dens` pixels each. fn(x, y) gets arcade
+  // coordinates of each fine pixel's centre and returns a colour or null (transparent).
+  function art(w, h, fn, dens = D) {
+    const pw = Math.ceil(w * dens), ph = Math.ceil(h * dens);
+    const c = document.createElement('canvas'); c.width = pw; c.height = ph;
+    const x = c.getContext('2d'), img = x.createImageData(pw, ph), d = img.data;
+    for (let j = 0; j < ph; j++) for (let i = 0; i < pw; i++) {
+      const col = fn((i + 0.5) / dens, (j + 0.5) / dens);
+      if (!col) continue;
+      const [r, g, b] = rgb(col), k = (j * pw + i) * 4;
+      d[k] = r; d[k + 1] = g; d[k + 2] = b; d[k + 3] = 255;
     }
+    x.putImageData(img, 0, 0);
+    c.lw = w; c.lh = h;
     return c;
   }
 
-  const BUGGY_PAL = {
-    k: '#2a0a22', P: '#f04fb8', L: '#ffa8e2', D: '#a3247a', C: '#7ff0ff', c: '#1f9fd0',
-    w: '#ffffff', G: '#d6dde6', g: '#7b8592', Y: '#ffd23f',
-  };
-  const BUGGY = sprite([
-    '...G............................',
-    '...G............................',
-    '..kGk.........kkkkk.............',
-    '..kGk........kCCwCck............',
-    '..kPk.......kCCwCCcck...........',
-    '.kPPPkkkkkkkPPPPPPPPPkkkkkk.....',
-    'kLLLLLLLLLLLLLLLLLLLLLLLLLLLk...',
-    'kPPPPPPPPPPPPPPPPPPPPPPPPPPPPk..',
-    'kPPYPPPPPPPPPPPPPPPPPPPPPPPPPk..',
-    'kDDDDDDDDDDDDDDDDDDDDDDDDDDDDkkk',
-    '.kDDkkkDDDkkkkDDDDkkkkDDDkkDGGGG',
-    '..kk...kkk....kkkk....kkk..k....',
-  ], BUGGY_PAL);
-
-  const WHEEL_PAL = { k: '#1d2026', W: '#d8dde4', d: '#6d7682', H: '#ffd23f' };
-  const WHEELS = [
-    sprite(['..kkkk..', '.kWWWWk.', 'kWdWWdWk', 'kWWHHWWk', 'kWWHHWWk', 'kWdWWdWk', '.kWWWWk.', '..kkkk..'], WHEEL_PAL),
-    sprite(['..kkkk..', '.kWddWk.', 'kWWddWWk', 'kddHHddk', 'kddHHddk', 'kWWddWWk', '.kWddWk.', '..kkkk..'], WHEEL_PAL),
-  ];
-  const MINI_BUGGY = sprite([
-    '.k..............',
-    '.k.....kkk......',
-    'kPkkkkkPCCkkkk..',
-    'kLLLLLLLLLLLLLkk',
-    'kPPPPPPPPPPPPPPG',
-    '.kWk..kWk..kWk..',
-  ], { ...BUGGY_PAL, W: '#d8dde4' });
-
-  // Saucer (type 1): drops bombs.
-  const UFO1 = [0, 1].map(f => sprite([
-    '......kkkk......',
-    '....kkCCwCkk....',
-    '...kCCCCwCCCk...',
-    '.kkkkkkkkkkkkkk.',
-    f ? 'kWRWWWYWWWRWWWYk' : 'kWYWWWRWWWYWWWRk',
-    '.kSSSSSSSSSSSSk.',
-    '...kkkkkkkkkk...',
-  ], { k: '#14161c', C: '#5fd6ff', w: '#ffffff', W: '#eef1f5', S: '#8c96a3', R: '#ff3b30', Y: '#ffd23f' }));
-
-  // Bomber (type 2): its bombs blast new craters.
-  const UFO2 = [0, 1].map(f => sprite([
-    '.....kkkkkk.....',
-    '....kYYwwYYk....',
-    '...kYYYYYYYYk...',
-    '.kkkkkkkkkkkkkk.',
-    'kOOOOOOOOOOOOOOk',
-    f ? 'kOrOOOOrOOOOrOOk' : 'kOOOrOOOOrOOOOrk',
-    '.kOOOOOOOOOOOOk.',
-    '..kk..kkkk..kk..',
-    f ? '..r....rr....r..' : '..Y....YY....Y..',
-  ], { k: '#1a0d04', Y: '#ffe066', w: '#ffffff', O: '#ff8a1f', r: '#ff3b30' }));
-
-  // Darter (type 3): small, fast, dives low.
-  const UFO3 = [0, 1].map(f => sprite([
-    '.....kk.....',
-    '....kGGk....',
-    '..kkGwwGkk..',
-    '.kGGGGGGGGk.',
-    f ? 'kGgGGgGGgGGk' : 'kGGgGGgGGgGk',
-    '.kkGGGGGGkk.',
-    '...k.kk.k...',
-  ], { k: '#062012', G: '#3ee87a', g: '#0f8a3c', w: '#e9fff0' }));
-
-  const TANK = sprite([
-    '........kkkkk.......',
-    '.......kTTlTTk......',
-    'GGGGGGGkTTTTTTk.....',
-    'gggggggkTTTTTTk.....',
-    '...kkkkkkkkkkkkkkk..',
-    '..kTlTTTTTTTTTTTTTk.',
-    '.kTTTTTTTTTTTTTTTTTk',
-    'kddddddddddddddddddk',
-    'kdWdkdWdkdWdkdWdkdWk',
-    '.kkkkkkkkkkkkkkkkkk.',
-  ], { k: '#0d1a08', T: '#5f9e2f', l: '#a8dd6b', G: '#c6ccd4', g: '#6e7681', d: '#33421f', W: '#9aa38f' });
-
-  const MINE = [0, 1].map(f => sprite([
-    '..kkkk..',
-    '.kMMMMk.',
-    f ? 'kMRMMRMk' : 'kMWMMWMk',
-    'kkkkkkkk',
-  ], { k: '#1a1a1a', M: '#9aa3ad', R: '#ff3b30', W: '#fff3a0' }));
-
-  // Rocks: lumpy piles shaded from the upper left.
-  const ROCK_PAL = ['#ffd9a3', '#e0a35c', '#b87332', '#7a4419', '#3d1f0a'];
-  function rockSprite(w, h, seed) {
-    const r = mulberry32(seed);
-    const bumps = Array.from({ length: 3 }, () => ({ c: 0.2 + r() * 0.6, s: 0.25 + r() * 0.25, a: 0.55 + r() * 0.45 }));
-    const top = i => {
-      const t = (i + 0.5) / w;
-      let v = 0;
-      for (const b of bumps) v = Math.max(v, b.a * Math.max(0, 1 - ((t - b.c) / b.s) ** 2));
-      return h - Math.round(v * h);
-    };
-    return pixels(w, h, (i, j) => {
-      const t = top(i);
-      if (j < t) return null;
-      if (j === t || (i === 0 || i === w - 1)) return ROCK_PAL[4];
-      const lit = (top(i - 1) > t ? 1 : 0) + (j - t < 2 ? 1 : 0) + (i < w * 0.4 ? 1 : 0) - (j > h - 3 ? 1 : 0);
-      const n = (i * 7 + j * 13 + seed) % 11 === 0;
-      return ROCK_PAL[clamp(3 - lit + (n ? 1 : 0), 0, 3)];
-    });
-  }
-  const ROCK_S = rockSprite(10, 8, 3), ROCK_L = rockSprite(16, 13, 11);
-
-  // Rolling boulder: a round rock with crack marks that turn as it rolls.
-  const BOULDER = [0, 1, 2, 3].map(f => pixels(14, 14, (i, j) => {
-    const cx = i - 6.5, cy = j - 6.5, d = Math.hypot(cx, cy);
-    if (d > 6.9) return null;
-    if (d > 6) return ROCK_PAL[4];
-    const a = Math.atan2(cy, cx) + f * Math.PI / 8;
-    const crack = Math.abs(Math.sin(a * 2)) < 0.12 && d > 2 && d < 5.5;
-    if (crack) return ROCK_PAL[4];
-    const lit = -cx * 0.6 - cy * 0.8;
-    return ROCK_PAL[lit > 3 ? 0 : lit > 0 ? 1 : lit > -3 ? 2 : 3];
-  }));
-
-  const SHELL = sprite(['.YYw', 'rOYY'], { Y: '#ffd23f', w: '#ffffff', r: '#ff3b30', O: '#ff8a1f' });
-  const BOMB = [0, 1].map(f => sprite(['.w.', 'wRw', f ? 'RYR' : 'YRY', '.R.'], { w: '#ffffff', R: '#ff3b30', Y: '#ffd23f' }));
-  const FWD_SHOT = sprite(['YYYYww', 'OYYYYw'], { Y: '#ffd23f', w: '#ffffff', O: '#ff8a1f' });
-  const UP_SHOT = sprite(['.w.', 'wYw', 'YYY', '.O.', '.O.'], { w: '#ffffff', Y: '#ffd23f', O: '#ff8a1f' });
-
-  // Explosion: four growing frames of a pixel fireball.
-  const BOOM_COLS = ['#ffffff', '#fff3a0', '#ffd23f', '#ff8a1f', '#ff3b30', '#8c1d12'];
-  const BOOM = [3, 5, 7, 8].map((rad, f) => {
-    const r = mulberry32(700 + f);
-    return pixels(18, 18, (i, j) => {
-      const d = Math.hypot(i - 8.5, j - 8.5) + r() * 2.2 - 1.1;
-      if (d > rad) return null;
-      if (f === 3 && r() < 0.45) return null;
-      const k = Math.floor(d / rad * 4 + f * 0.6);
-      return BOOM_COLS[clamp(k, 0, 5)];
-    });
+  // ---------------------------------------------------------------- sprites
+  // Moon buggy, traced from the arcade sprite (units are half arcade pixels).
+  const BODY = [[2, 22], [4, 19.5], [8, 18.5], [28, 18], [31, 15], [34, 12], [37, 10], [47, 10], [50, 12], [53, 15],
+    [56, 16.5], [63, 17], [65, 18.5], [65, 21.5], [62, 22.5], [62, 27], [60, 29.5], [6, 29.5], [3, 28], [2, 26]];
+  const CAB = [[34.6, 12.6], [37.6, 11.2], [46.8, 11.2], [49.6, 13], [52.4, 16.2], [32.8, 16.8]];
+  const BUGGY = art(33, 17, (x, y) => {
+    const u = x * 2, v = y * 2;
+    if (box(u, v, 19.6, 1.5, 21.4, 17)) return u < 20.3 || v < 3 ? C.magHi : C.mag;           // anti-air barrel
+    if (box(u, v, 17.6, 6.5, 23.4, 10.2) || box(u, v, 17.8, 10, 19.4, 16) || box(u, v, 21.6, 10, 23.2, 16) || box(u, v, 14, 15.4, 28, 18.4)) return C.ink;
+    if (box(u, v, 63.4, 17.4, 65.6, 21.6)) return C.magHi;                                      // cannon muzzle
+    if (box(u, v, 56, 18.6, 62.6, 20.4)) return C.mag;
+    if (box(u, v, 46, 17.4, 63.4, 21.6)) return box(u, v, 46, 17.4, 48.6, 18.8) ? C.cyan : C.ink;
+    if (inPoly(CAB, u, v)) return v < 12.4 + (u - 36) * 0.04 || (u > 47.5 && v < 14.2) ? C.cabHi : C.cab;
+    if (inPoly(BODY, u, v)) {
+      if (!inPoly(BODY, u, v - 1.3)) return C.magHi;
+      if (v > 27.2 || !inPoly(BODY, u + 1.5, v)) return C.magLo;
+      if (box(u, v, 19, 18.4, 21.6, 19.9)) return C.cyan;
+      if (box(u, v, 6, 23, 60, 23.8)) return C.magLo;                                          // panel seam
+      return C.mag;
+    }
+    return null;
   });
 
-  // ---------------------------------------------------------------- background layers (pixel art)
-  const BG = { stars: [], mountains: null, hills: null, city: null, ground: null };
-  const MOUNT_H = 92, MID_H = 40, GROUND_H = H - GROUND_Y;
+  // Gear wheels: dark rim with eight teeth, cyan studs and hub. Eight frames cover one tooth step.
+  const WHEEL = Array.from({ length: 8 }, (_, f) => art(8, 8, (x, y) => {
+    const dx = x - 4, dy = y - 4, r = Math.hypot(dx, dy);
+    const a = Math.atan2(dy, dx) - f * Math.PI / 32;
+    const k = ((a / (Math.PI / 4)) % 1 + 1) % 1;
+    const tooth = Math.abs(k - 0.5) < 0.2;
+    if (r > (tooth ? 3.95 : 3.35)) return null;
+    if (Math.abs(dx) < 1.0 && Math.abs(dy) < 1.25) return dx < -0.3 && dy < -0.5 ? C.cabHi : C.cyan;
+    if (r > 2.35 && r < 3.15 && (k < 0.1 || k > 0.9)) return C.cyan;
+    return r > 3.3 ? '#1d1a44' : C.ink;
+  }));
 
-  function ridge(seed, n, base, amp, rough) {
-    const r = mulberry32(seed), a = new Float32Array(n);
-    let step = n / 4;
-    for (let i = 0; i < n; i += step) a[i] = base + (r() - 0.5) * amp;
-    let sc = amp * 0.55;
-    while (step > 1) {
-      const half = step / 2;
-      for (let i = 0; i < n; i += step) a[i + half] = (a[i] + a[(i + step) % n]) / 2 + (r() - 0.5) * sc;
-      sc *= rough; step = half;
+  const MINI_BUGGY = art(16, 8, (x, y) => {
+    const u = x * 4.1, v = y * 4.1 + 2;
+    if (inPoly(BODY, u, v) || box(u, v, 19.6, 4, 21.4, 17)) return inPoly(CAB, u, v) ? C.cab : C.mag;
+    for (const cx of WX) if (Math.hypot(x - cx / 2, y - 6.9) < 1.25) return C.ink;
+    return null;
+  });
+
+  // Saucers: domed craft with wide split wings and red landing feet.
+  function saucer(wing, wingHi, wingLo, dome, domeHi, eye, feet, blink) {
+    return art(19, 9, (x, y) => {
+      const dx = x - 9.5;
+      if (y < 4.8 && dx * dx / 13.7 + (y - 4.8) ** 2 / 17.6 < 1) {
+        if (Math.abs(Math.abs(dx) - 1.15) < 0.5 && Math.abs(y - 2.9) < 0.55) return eye;
+        return y < 1.8 || dx < -2 ? domeHi : dome;
+      }
+      if (y >= 4.4 && y < 6.9 && Math.abs(dx) < 9.2 - (y - 4.4) * 1.3) {
+        if (y > 5.7 && Math.abs(dx) < 1.4) return null;
+        return y < 5.1 ? wingHi : y > 6.2 ? wingLo : wing;
+      }
+      if (y >= 6.9 && y < 8.2 && Math.abs(dx) > 3.2 && Math.abs(dx) < 6.4) return blink && Math.abs(dx) > 4.8 ? '#ffb000' : feet;
+      return null;
+    });
+  }
+  const UFO1 = [0, 1].map(f => saucer(C.yellow, C.yellowHi, C.yellowLo, C.dome, C.domeHi, C.red, C.red, f));
+  const UFO2 = [0, 1].map(f => saucer('#e4ecf6', '#ffffff', '#9aa8bc', '#f04898', '#ffa0d0', C.yellow, '#ff7a10', f));
+  // Tri-orb craft: three glowing spheres; it lobs crater-making grenades.
+  const UFO3 = [0, 1].map(f => art(15, 12, (x, y) => {
+    const orbs = [[7.5, 3], [3, 8.6], [12, 8.6]];
+    for (const [ox, oy] of orbs) {
+      const d = Math.hypot(x - ox, y - oy);
+      if (d < 2.9) return d < 1 && x < ox && y < oy ? '#ffffff' : (x - ox) + (y - oy) < -1 ? '#ff9ad8' : f ? '#ff2a7a' : '#e01060';
     }
-    return a;
-  }
+    if (inPoly(orbs, x, y)) return Math.hypot(x - 7.5, y - 6.7) < 1.2 ? (f ? C.yellow : '#ff7a10') : '#3a1050';
+    return null;
+  }));
 
-  function paintMountains() {
-    const w = 512, h = MOUNT_H;
-    const far = ridge(17, w, 40, 46, 0.58), near = ridge(51, w, 22, 22, 0.55);
-    const ht = (p, i) => Math.round(clamp(p[(i + w) % w], 6, h - 2));
-    return pixels(w, h, (i, j) => {
-      const y = h - j;
-      const n = ht(near, i);
-      if (y <= n) {
-        const slope = ht(near, i + 1) - ht(near, i - 1);
-        if (y >= n - 1) return '#bfe3ff';
-        if (slope > 0 && y > n - 5) return '#6fb0f2';
-        return y < 8 ? '#123a7a' : '#1f57b0';
-      }
-      const f = ht(far, i);
-      if (y <= f) {
-        const slope = ht(far, i + 1) - ht(far, i - 1);
-        if (y >= f - 1) return '#ffffff';
-        if (y > f - 5 && f > 48) return '#e6f4ff';      // snow caps on the tallest peaks
-        if (slope > 0 && y > f - 7) return '#a8d4ff';
-        if (slope < 0 && y > f - 4) return '#3c7ed6';
-        return (i * 5 + j * 3) % 29 === 0 ? '#78b6f5' : '#4f95e6';
-      }
-      return null;
+  // Falling bomb (magenta dart with fins) and the tri-orb's flashing grenade.
+  const BOMB = [0, 1].map(f => art(5, 7, (x, y) => {
+    const dx = Math.abs(x - 2.5);
+    if (y < 5.6 && dx < 0.75) return y < 1.2 ? '#ff9ad0' : f ? '#e8108c' : '#c80078';
+    if (y >= 1 && y < 3.4 && dx < 2.5 - (y - 1) * 0.6) return f ? '#c80078' : '#e8108c';
+    if (y >= 5.6 && y < 6.8 && dx < 0.5) return C.red;
+    return null;
+  }));
+  const GRENADE = [0, 1].map(f => art(3, 3, (x, y) => Math.hypot(x - 1.5, y - 1.5) < 1.45 ? (f ? '#ffffff' : C.yellow) : null));
+
+  const UP_SHOT = art(1.4, 5, (x, y) => (y < 1 ? C.white : '#e8f4ff'));
+  const FWD_SHOT = art(9, 3, (x, y) => {
+    if (Math.hypot(x - 7.3, y - 1.5) < 1.45) return x > 7.6 && y < 1.4 ? '#ffd0a0' : C.red;
+    if (y > 1 && y < 2 && ((x > 4 && x < 5.4) || (x > 1 && x < 2.2))) return x > 4 ? C.yellow : '#9a9a10';
+    return null;
+  });
+
+  // Rocks: stepped cones in ochre with an olive peak, a pale lit edge and dark specks.
+  function rockArt(w, h, seed) {
+    return art(w, h, (x, y) => {
+      const t = (h - y) / h, tier = Math.floor((h - y) / 1.9), tq = tier * 1.9 / h;
+      const half = w / 2 * Math.pow(Math.max(0, 1 - tq), 0.8) * (0.93 + 0.12 * hash2(tier, seed));
+      const cx = w / 2 + (hash2(tier * 7, seed) - 0.5) * 0.9, rel = (x - cx) / Math.max(0.5, half);
+      if (Math.abs(rel) > 1 || t > 0.96) return null;
+      if (hash2(Math.floor(x * 3), Math.floor(y * 3) + seed * 77) < 0.06 && Math.abs(rel) < 0.7) return '#5a3c0e';
+      if (rel > 0.8) return '#f4d47c';
+      if (rel > 0.6) return '#8a6418';
+      if (((h - y) % 1.9) < 0.38) return t > 0.6 ? '#b4a034' : '#e4ac40';
+      if (t > 0.62) return rel < 0 ? '#8c7c20' : '#a8962c';
+      return rel < -0.35 ? '#b47e20' : '#cc922a';
     });
   }
+  const ROCK_S = rockArt(9, 9, 3), ROCK_L = rockArt(13, 14, 11);
 
-  function paintHills() {
-    const w = 512, h = MID_H;
-    const hb = i => 12 + 8 * Math.abs(Math.sin(i * Math.PI / 128 + 1.7)) + 5 * Math.abs(Math.sin(i * Math.PI / 41 + 2.2));
-    const hf = i => 6 + 14 * Math.abs(Math.sin(i * Math.PI / 96 + 0.4)) ** 1.3 + 6 * Math.abs(Math.sin(i * Math.PI / 37 + 0.8));
-    return pixels(w, h, (i, j) => {
-      const y = h - j, f = Math.round(hf(i)), b = Math.round(hb(i));
-      if (y <= f) {
-        if (y >= f - 1) return '#9cff8a';
-        const slope = hf(i + 1) - hf(i - 1);
-        if (slope > 0.15 && y > f - 4) return '#4fd65a';
-        return (i * 3 + j * 5) % 23 === 0 ? '#0b5a25' : '#1f9a3f';
-      }
-      if (y <= b) return y >= b - 1 ? '#3bb85a' : '#106b2e';
-      return null;
-    });
-  }
+  const BOULDER = Array.from({ length: 8 }, (_, f) => art(11, 11, (x, y) => {
+    const dx = x - 5.5, dy = y - 5.5, d = Math.hypot(dx, dy) + (noise1(Math.atan2(dy, dx) * 2.2 + 9, 5, 14) - 0.5) * 0.9;
+    if (d > 5.3) return null;
+    const a = Math.atan2(dy, dx) + f * Math.PI / 4;
+    if (Math.abs(Math.sin(a * 1.5)) < 0.09 && d > 1.6 && d < 4.6) return '#4e3410';
+    const lit = -dx * 0.55 - dy * 0.8;
+    if (d > 4.6) return lit > 0 ? '#e8b850' : '#6e4a14';
+    return lit > 2.4 ? '#f4d47c' : lit > 0 ? '#cc922a' : lit > -2.4 ? '#a87420' : '#7e5418';
+  }));
 
-  function paintCity() {
-    const w = 512, h = MID_H, r = mulberry32(4242);
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const x = c.getContext('2d');
-    const box = (px, py, pw, ph, col) => { x.fillStyle = col; x.fillRect(px, py, pw, ph); };
-    for (let t = 0; t < w; t += 5 + Math.floor(r() * 8)) box(t, h - 12 - Math.floor(r() * 14), 4 + Math.floor(r() * 5), 40, '#16346b');
-    let t = 2;
-    while (t < w - 16) {
-      const k = r();
-      if (k < 0.35) {                                    // dome
-        const rad = 6 + Math.floor(r() * 6);
-        for (let i = -rad; i <= rad; i++) {
-          const hh = Math.round(Math.sqrt(rad * rad - i * i) * 0.9);
-          box(t + rad + i, h - 4 - hh, 1, hh, i < -rad / 3 ? '#e8f4ff' : i < rad / 3 ? '#9cc7ef' : '#5a86c0');
-          box(t + rad + i, h - 4 - hh, 1, 1, '#ffffff');
+  const MINE = [0, 1].map(f => art(8, 4, (x, y) => {
+    const dx = x - 4;
+    if (y > 1.4 && Math.abs(dx) < 3.9) return y > 3.2 ? '#3a3e48' : dx < -1 ? '#c0c6d0' : '#8a92a0';
+    if (Math.hypot(dx, y - 1.6) < 1.3) return f ? '#ff3020' : '#701010';
+    return null;
+  }));
+
+  // Tank (faces left, towards the buggy).
+  const TANK = art(19, 11, (x, y) => {
+    if (box(x, y, 0, 3, 7, 4.4)) return y < 3.5 ? '#e8eef6' : '#8a96a8';                         // barrel
+    if (inPoly([[7, 1.2], [9, 0.4], [13.5, 0.4], [15, 2], [15, 5.2], [6.8, 5.2]], x, y)) return y < 1.4 ? '#9ec4ff' : x < 9 ? '#5c8ef0' : '#2c5ad8';
+    if (inPoly([[2.5, 5.2], [17.5, 5.2], [18.6, 7], [1.6, 7]], x, y)) return y < 5.8 ? '#9ec4ff' : '#3a66e0';
+    if (y >= 7 && y < 10.8 && x > 1.4 && x < 17.8) {
+      const wx = ((x - 1.4) % 3.3) - 1.65, wy = y - 8.9;
+      if (Math.hypot(wx, wy) < 1.2) return Math.hypot(wx, wy) < 0.5 ? '#c0c6d0' : '#6a7080';
+      return '#22242c';
+    }
+    return null;
+  });
+
+  // Rocket car that charges in from behind.
+  const ROCKET = [0, 1].map(f => art(26, 9, (x, y) => {
+    if (x < 5 && Math.abs(y - 4.6) < (f ? 2.2 : 1.6) - x * 0.25) return x < 2.5 ? '#fff3a0' : C.red;          // exhaust
+    if (inPoly([[5, 2.4], [16, 2.4], [22, 4], [25.6, 5.6], [25.6, 6.6], [5, 6.6]], x, y)) {
+      if (box(x, y, 11, 2.4, 15.6, 4.2)) return C.cab;
+      return y < 3.2 ? '#ffffff' : y > 5.8 ? '#a8aebc' : '#e4e8f0';
+    }
+    if (box(x, y, 7, 4.6, 22, 5.4)) return C.red;
+    for (const cx of [8, 20]) if (Math.hypot(x - cx, y - 7) < 1.8) return Math.hypot(x - cx, y - 7) < 0.7 ? '#c0c6d0' : C.ink;
+    return null;
+  }));
+
+  // Explosions: spiky red/yellow bursts; ground blasts add a cloud of grey smoke.
+  function blastFrames(seed, ground) {
+    const r = mulberry32(seed);
+    const rays = Array.from({ length: ground ? 11 : 16 }, (_, i) => ground
+      ? { a: -Math.PI * (0.1 + (i + r() * 0.6) / 11 * 0.8), l: 0.5 + r() * 0.5, w: 0.1 + r() * 0.08 }
+      : { a: r() * TAU, l: 0.55 + r() * 0.45, w: 0.12 + r() * 0.12 });
+    const dots = Array.from({ length: 40 }, () => ({ a: r() * TAU, d: r(), c: ['#ffffff', C.yellow, C.red, '#9a0c0c', '#f25cf0'][Math.floor(r() * 5)] }));
+    return Array.from({ length: 7 }, (_, f) => {
+      const k = (f + 1) / 7, R = (ground ? 14 : 10) * Math.min(1, k * 1.6), fade = f > 3;
+      return art(22, 22, (x, y) => {
+        const dx = x - 11, dy = y - (ground ? 15 : 11), d = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
+        if (ground) {
+          const puffs = [[-4.5, 4.4], [-1.5, 3.4], [1.8, 3.6], [4.6, 4.6], [0, 5.2]];
+          const rad = (1.4 + 2.2 * k) * (fade ? 1 - (f - 3) * 0.1 : 1);
+          for (const [cx, cy] of puffs) {
+            const pd = Math.hypot(dx - cx * (0.6 + k * 0.6), (dy - cy + 1.6) * 1.15);
+            if (pd < rad && dy > -1.5) return dx - cx < -rad * 0.3 && dy - cy < 0 ? '#eef0f6' : pd > rad * 0.75 ? '#9aa2b4' : C.smoke;
+          }
         }
-        for (let i = -rad + 2; i < rad - 1; i += 3) box(t + rad + i, h - 6, 1, 1, '#ffd23f');
-        t += rad * 2 + 3;
-      } else if (k < 0.75) {                             // block tower
-        const bw = 8 + Math.floor(r() * 10), bh = 10 + Math.floor(r() * 18);
-        box(t, h - 4 - bh, bw, bh, '#3f6fb8');
-        box(t, h - 4 - bh, 2, bh, '#7fb0f0');
-        box(t, h - 4 - bh, bw, 1, '#cfe6ff');
-        for (let wy = h - bh; wy < h - 6; wy += 3) for (let wx = t + 3; wx < t + bw - 1; wx += 3) if (r() < 0.6) box(wx, wy, 1, 1, r() < 0.8 ? '#ffd23f' : '#7ff0ff');
-        t += bw + 2 + Math.floor(r() * 4);
-      } else {                                           // antenna mast
-        const th = 18 + Math.floor(r() * 14);
-        box(t + 1, h - 4 - th, 2, th, '#c9d6e6');
-        box(t - 1, h - 4 - th, 6, 2, '#e8f4ff');
-        box(t + 1, h - 6 - th, 2, 2, '#ff3b30');
-        t += 8;
+        for (const ray of rays) {
+          let da = Math.abs(a - ray.a); da = Math.min(da, TAU - da);
+          if (da < ray.w * (1 - (ground ? 0.65 : 1) * d / (R * ray.l + 0.01)) && d < R * ray.l && !(fade && d < R * 0.35 * (f - 3))) {
+            if (ground) return d < R * ray.l * 0.55 ? (f < 2 ? '#fffaa0' : C.yellow) : d < R * ray.l * 0.8 ? '#c81010' : '#7a0808';
+            return d < R * ray.l * 0.4 ? (f < 2 ? '#ffffff' : C.yellow) : d < R * ray.l * 0.75 ? '#e05010' : '#9a0c0c';
+          }
+        }
+        if (!ground && !fade) for (const p of dots) {
+          const px = Math.cos(p.a) * p.d * R, py = Math.sin(p.a) * p.d * R;
+          if (Math.abs(dx - px) < 0.6 && Math.abs(dy - py) < 0.6) return p.c;
+        }
+        if (d < R * 0.3 && f < 3) return f ? C.yellow : '#ffffff';
+        return null;
+      });
+    });
+  }
+  const BLAST_AIR = blastFrames(41, false), BLAST_GROUND = blastFrames(77, true);
+
+  // ---------------------------------------------------------------- backdrops (2 px per arcade pixel)
+  const BG = {};
+  const MOUNT_H = 112, HILL_H = 84;
+
+  // Teal peaks with jagged deep-blue shading on their faces and in blotches near the summits.
+  function paintMountains() {
+    const w = 512, h = MOUNT_H, r = mulberry32(17), n = w * DB;
+    const spikes = Array.from({ length: 34 }, () => {
+      const hh = 20 + Math.pow(r(), 1.6) * 74;
+      return { c: r() * w, h: hh, hw: hh * (0.22 + r() * 0.3) };
+    });
+    const prof = new Float32Array(n + 2);
+    for (let i = 0; i <= n + 1; i++) {
+      const x = i / DB;
+      let p = 18 + 8 * noise1(x / 21, 3, w / 21);
+      for (const s of spikes) {
+        let d = Math.abs(x - s.c); d = Math.min(d, w - d);
+        p = Math.max(p, s.h - d * s.h / s.hw);
       }
+      prof[i] = p + (noise1(x * 0.7, 9, w * 0.7) - 0.5) * 5 + (noise1(x * 2.1, 4, Math.round(w * 2.1)) - 0.5) * 2;
     }
-    box(0, h - 4, w, 4, '#2a4f8f');
-    for (let i = 0; i < w; i += 9) box(i, h - 4, 4, 1, '#7fb0f0');
-    return c;
+    return art(w, h, (x, y) => {
+      const i = Math.min(n, Math.floor(x * DB)), p = prof[i], yb = h - y;
+      if (yb > p) return null;
+      const depth = p - yb, slope = prof[Math.min(n + 1, i + 2)] - prof[Math.max(0, i - 2)];
+      const nz = noise2(x / 2.6, y / 3.2, 5, Math.round(w / 2.6));
+      if (depth < 0.9 && slope > 0) return C.tealHi;
+      if (slope < -0.2 && depth < 2.5 + nz * 9) return C.blue;
+      if (yb > 40 && nz > 0.78 && noise2(x / 1.6, y / 2, 8, Math.round(w / 1.6)) > 0.5) return C.blue;
+      if (depth < 1.2 + nz * 2.5 && slope < 0.1) return C.blue;
+      return C.teal;
+    }, DB);
   }
 
-  function paintGround() {
-    const w = 256, h = GROUND_H, r = mulberry32(77);
-    const c = document.createElement('canvas'); c.width = w; c.height = h;
-    const x = c.getContext('2d');
-    const box = (px, py, pw, ph, col) => { x.fillStyle = col; x.fillRect(px, py, pw, ph); };
-    box(0, 0, w, h, '#c47a35');
-    box(0, 0, w, 1, '#ffd29a');
-    box(0, 1, w, 2, '#e8a45a');
-    for (let y = 5; y < h; y += 3 + Math.floor(r() * 3)) {
-      let sx = Math.floor(r() * 24);
-      while (sx < w) {
-        const len = 6 + Math.floor(r() * 28);
-        for (let i = 0; i < len; i++) box((sx + i) % w, y, 1, 1, '#8a4a1c');
-        for (let i = 2; i < len * 0.6; i++) box((sx + i) % w, y - 1, 1, 1, '#dc9a52');
-        sx += len + 8 + Math.floor(r() * 26);
+  // Rolling green hills, with dark ridge lines and streaks on the slopes facing away from the sun.
+  function paintHills() {
+    const w = 512, h = HILL_H, n = w * DB;
+    const P = x => TAU * x / w;
+    const back = new Float32Array(n + 2), front = new Float32Array(n + 2);
+    for (let i = 0; i <= n + 1; i++) {
+      const x = i / DB;
+      back[i] = 50 + 16 * Math.sin(P(x) * 3 + 1) + 9 * Math.sin(P(x) * 7 + 2.2) + 4 * (noise1(x / 9, 6, w / 9) - 0.5);
+      front[i] = 26 + 15 * Math.sin(P(x) * 2 + 0.3) + 9 * Math.sin(P(x) * 5 + 4) + 5 * Math.sin(P(x) * 11 + 1) + 2 * (noise1(x / 6, 2, w / 6) - 0.5);
+    }
+    const shade = (prof, i, yb, x, y, seed) => {
+      const slope = prof[Math.min(n + 1, i + 2)] - prof[Math.max(0, i - 2)], depth = prof[i] - yb;
+      const streak = ((x * 0.5 + y + 6 * noise1(x / 7, seed + 4, w / 7)) % 9) < 1.3 && noise2(x / 3, y / 3, seed, Math.round(w / 3)) > 0.62;
+      if (slope < -0.25 && depth < 3 + 10 * noise2(x / 6, y / 5, seed + 1, Math.round(w / 6))) return C.greenLo;
+      if (depth < 22 && streak) return C.greenLo;
+      if (depth < 0.8 && slope > 0.1) return C.greenHi;
+      return C.green;
+    };
+    return art(w, h, (x, y) => {
+      const i = Math.min(n, Math.floor(x * DB)), yb = h - y;
+      if (yb <= front[i]) return Math.abs(front[i] - yb) < 0.9 && front[i] < back[i] - 1 ? C.greenLo : shade(front, i, yb, x, y, 3);
+      if (yb <= back[i]) return shade(back, i, yb, x, y, 11);
+      return null;
+    }, DB);
+  }
+
+  // The alien city: bulbous green towers with yellow lit edges and rows of dark windows.
+  function paintCity() {
+    const w = 512, h = HILL_H, r = mulberry32(4242), towers = [];
+    for (let x = 8; x < w - 8; x += 22 + r() * 22) {
+      const H = 34 + r() * 42, bulbs = [];
+      let y = 0, rad = 9 + r() * 5;
+      while (y < H - 4) {
+        const rr = Math.max(3.4, rad * (0.7 + r() * 0.45));
+        bulbs.push({ y: y + rr * 0.9, rx: rr, ry: rr * (0.8 + r() * 0.5) });
+        y += rr * 1.5; rad *= 0.82;
       }
+      towers.push({ x, H: y, bulbs, stem: 2.4 + r() * 1.6, ant: r() < 0.6 });
     }
-    for (let i = 0; i < 90; i++) {
-      const px = Math.floor(r() * w), py = 4 + Math.floor(r() * (h - 5));
-      box(px, py, 2, 1, '#5e2f10'); box(px, py - 1, 1, 1, '#ffd29a');
-    }
-    return c;
+    return art(w, h, (x, y) => {
+      const yb = h - y, base = 7 + 3 * Math.sin(TAU * x / w * 9);
+      if (yb < base) return yb > base - 1.4 ? C.greenHi : C.green;
+      for (const t of towers) {
+        const dx = x - t.x;
+        if (Math.abs(dx) > 18) continue;
+        if (t.ant && Math.abs(dx) < 0.45 && yb > t.H && yb < t.H + 8) return '#c8f0c8';
+        if (t.ant && Math.hypot(dx, yb - t.H - 8.5) < 1.1) return C.red;
+        for (const b of t.bulbs) {
+          const ex = dx / b.rx, ey = (yb - b.y) / b.ry;
+          if (ex * ex + ey * ey <= 1) {
+            if (ex < -0.72 + ey * ey * 0.3) return C.yellow;
+            if (ex > 0.76) return C.greenLo;
+            if (Math.abs(ey) < 0.55 && Math.abs(ex) < 0.62 && (yb - b.y + 30) % 2.2 < 0.75 && (dx + 40) % 1.8 < 1.1) return '#06301a';
+            return C.green;
+          }
+        }
+        if (Math.abs(dx) < t.stem && yb < t.H) return dx < -t.stem + 0.8 ? C.yellow : C.green;
+      }
+      return null;
+    }, DB);
+  }
+
+  // Ground texture: the arcade's flat peach, with faint strata, grit and pebbles.
+  function paintGround() {
+    const w = 256, h = H - GROUND_Y + 14, r = mulberry32(77);
+    const pebbles = Array.from({ length: 90 }, () => ({ x: r() * w, y: 3 + r() * (h - 4), r: 0.35 + r() * r() * 1.3 }));
+    return art(w, h, (x, y) => {
+      for (const p of pebbles) {
+        let dx = x - p.x; if (dx > w / 2) dx -= w; if (dx < -w / 2) dx += w;
+        const dy = y - p.y;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) continue;
+        const d = Math.hypot(dx, dy * 1.4);
+        if (d < p.r) return dx + dy < -p.r * 0.4 ? C.peachHi : dx + dy > p.r * 0.5 ? C.dirt : C.peachLo;
+        if (d < p.r + 0.45 && dy > 0) return '#e88f52';
+      }
+      const g = hash2(Math.floor(x * D), Math.floor(y * D) + 999);
+      if (g < 0.018) return C.peachLo;
+      if (g > 0.988) return C.peachHi;
+      const strata = noise2(x / 26, y / 2.2, 4, Math.round(w / 26));
+      return strata > 0.68 ? '#fb9e5c' : strata < 0.18 ? '#ffac6c' : C.peach;
+    });
   }
 
   function buildLayers() {
@@ -332,10 +416,38 @@ const Classic = (() => {
     BG.hills = paintHills();
     BG.city = paintCity();
     BG.ground = paintGround();
-    const r = mulberry32(99);
-    for (let i = 0; i < 70; i++) {
-      BG.stars.push({ x: Math.floor(r() * 1024), y: HUD_H + 3 + Math.floor(r() * 70), c: pick(r, ['#ffffff', '#9fd6ff', '#ffe08a', '#ff9f9f']), tw: Math.floor(r() * 64) });
+  }
+
+  // ---------------------------------------------------------------- terrain
+  // Rolling, lumpy lunar road: long swells, medium undulation and small bumps.
+  function surfRaw(wx) {
+    const swell = 6 * Math.sin(wx * 0.0093 + 0.7) * Math.max(0, Math.sin(wx * 0.0019 + 1.2));
+    return GROUND_Y - swell - 2.2 * Math.sin(wx * 0.029 + 1.1) - 1.2 * Math.sin(wx * 0.077 + 0.3)
+      - 1.3 * (noise1(wx / 4.5, 21) - 0.5) - 0.6 * (noise1(wx / 1.6, 22) - 0.5);
+  }
+  // Craters throw up a lip of ejecta on each side; wheels bounce over it.
+  function rim(wx) {
+    let v = 0;
+    for (const c of G.craters) {
+      if (wx < c.x - 8 || wx > c.x + c.w + 8) continue;
+      const k = c.small ? 1.3 : 2.4;
+      v += k * Math.exp(-(((wx - c.x + 1.6) / 2.6) ** 2)) + k * Math.exp(-(((wx - c.x - c.w - 1.6) / 2.6) ** 2));
     }
+    return v;
+  }
+  const groundAt = wx => surfRaw(wx) - rim(wx);
+
+  // Steep, broken walls and a rubble-strewn floor.
+  function craterDepth(c, t) {
+    const bowl = Math.pow(Math.max(0, 1 - Math.abs(2 * t - 1) ** 1.8), 0.6);
+    return Math.max(0.6, c.depth * bowl + (noise1(t * c.w * 0.8, c.seed) - 0.5) * 2.2 * bowl);
+  }
+
+  // The visible surface: the road with every pit cut into it.
+  function surfaceVis(wx) {
+    let y = groundAt(wx);
+    for (const c of G.craters) if (wx > c.x && wx < c.x + c.w) y += craterDepth(c, (wx - c.x) / c.w);
+    return y;
   }
 
   // ---------------------------------------------------------------- state
@@ -343,9 +455,9 @@ const Classic = (() => {
     mode: 'attract', state: 'title', timer: 600, frame: 0, paused: false, demo: false,
     score: 0, hi: 0, lives: 3, nextExtra: 0, course: 0, cp: 0,
     dist: 0, speed: SPEED_BASE, segFrames: 0, genSeg: 0, nextFree: 0, fireHold: 0,
-    theme: 0, prevTheme: 0, themeT: 0, lastDeath: '',
+    theme: 0, prevTheme: 0, themeT: 0, lastDeath: '', sink: 0,
     buggy: null, craters: [], obs: [], shells: [], triggers: [], ufos: [], bombs: [], ups: [], fwd: null,
-    parts: [], texts: [], debris: [], booms: [], wave: null, panel: null,
+    parts: [], texts: [], debris: [], booms: [], wave: null, squad: null, panel: null, rocket: null,
   };
   let scores = Store.load('lp_classic_scores', DEFAULT_SCORES.slice());
   const records = Store.load('lp_classic_records', {});
@@ -356,14 +468,19 @@ const Classic = (() => {
   function release(a) { Input.held[a] = false; }
   function releaseAll() { Input.held = {}; }
 
-  const newBuggy = () => ({ x: 52, y: 0, vy: 0, air: false, wb: [0, 0, 0], wv: [0, 0, 0], spin: 0 });
+  const newBuggy = () => ({ x: 52, air: false, cy: 0, vy: 0, wy: [0, 0, 0], wv: [0, 0, 0], spin: 0 });
+  function settleBuggy() {
+    const b = G.buggy;
+    for (let i = 0; i < 3; i++) { b.wy[i] = groundAt(G.dist + b.x + WX[i]) - WR; b.wv[i] = 0; }
+  }
   const themeFor = cp => CHECKPOINTS.indexOf(cp) % 2;
 
   function clearField() {
     G.buggy = newBuggy();
     G.craters = []; G.obs = []; G.shells = []; G.triggers = []; G.ufos = []; G.bombs = [];
     G.ups = []; G.fwd = null; G.parts = []; G.texts = []; G.debris = []; G.booms = [];
-    G.wave = null; G.panel = null; G.segFrames = 0;
+    G.wave = null; G.squad = null; G.panel = null; G.rocket = null; G.segFrames = 0; G.sink = 0;
+    settleBuggy();
   }
 
   function resetField(cp) {
@@ -373,6 +490,7 @@ const Classic = (() => {
     G.genSeg = cp; G.nextFree = 0;
     G.theme = G.prevTheme = themeFor(cp); G.themeT = 0;
     ensureGenerated();
+    settleBuggy();
   }
 
   const worldBuggy = () => G.dist + G.buggy.x + 16;
@@ -394,7 +512,11 @@ const Classic = (() => {
     for (const [k, w] of list) if ((v -= w) < 0) return k;
     return list[0][0];
   }
-  const addCrater = (x, w) => { G.craters.push({ x, w, depth: Math.min(14, 5 + Math.floor(w / 3)), passed: false }); return w; };
+  let craterSeed = 1;
+  const addCrater = (x, w, small = false) => {
+    G.craters.push({ x, w, depth: small ? 6 : Math.min(13, 6 + w / 3.2), passed: false, small, seed: craterSeed++ });
+    return w;
+  };
 
   function genSegment(s) {
     if (s > 24) return;
@@ -412,17 +534,17 @@ const Classic = (() => {
       ]);
       let used = 0;
       switch (kind) {
-        case 'craterS': used = addCrater(x, 12 + Math.floor(r() * 6)); break;
-        case 'craterL': used = addCrater(x, 20 + Math.floor(r() * 8)); break;
+        case 'craterS': used = addCrater(x, 12 + Math.floor(r() * 5)); break;
+        case 'craterL': used = addCrater(x, 19 + Math.floor(r() * 7)); break;
         case 'rockS': G.obs.push({ type: 'rock', x, big: false }); used = 10; break;
-        case 'rockL': G.obs.push({ type: 'rock', x, big: true }); used = 16; break;
+        case 'rockL': G.obs.push({ type: 'rock', x, big: true }); used = 14; break;
         case 'mine': G.obs.push({ type: 'mine', x }); used = 8; break;
         case 'boulder': G.obs.push({ type: 'boulder', x: x + 40, rot: 0 }); used = 54; break;
         case 'tank': G.obs.push({ type: 'tank', x, cd: 50 }); tanks++; used = 20; break;
         case 'craterRock': {
           G.obs.push({ type: 'rock', x, big: false });
           const off = 112 + Math.floor(r() * 24);
-          used = off + addCrater(x + off, 12 + Math.floor(r() * 6));
+          used = off + addCrater(x + off, 12 + Math.floor(r() * 5));
           break;
         }
       }
@@ -434,8 +556,10 @@ const Classic = (() => {
       let type;
       if (G.course === 0) type = s < 7 ? 1 : s < 15 ? (r() < 0.55 ? 1 : 2) : weighted(r, [[1, 1], [2, 1.2], [3, 1.2]]);
       else type = 1 + Math.floor(r() * 3);
-      G.triggers.push({ x: letterX(s) + SEG * (0.15 + r() * 0.3), type, n: 3 + (d > 0.5 ? 1 : 0) + (d > 0.85 ? 1 : 0), used: false });
+      G.triggers.push({ kind: 'wave', x: letterX(s) + SEG * (0.15 + r() * 0.3), type, n: 2 + Math.floor(r() * 2) + (d > 0.5 ? 1 : 0) + (d > 0.85 ? 1 : 0), used: false });
     }
+    // The rocket car charges from behind a few times on later stretches.
+    if ((G.course > 0 ? s >= 2 : s >= 10) && s % 5 === 2) G.triggers.push({ kind: 'rocket', x: letterX(s) + SEG * 0.55, used: false });
   }
 
   function ensureGenerated() {
@@ -443,28 +567,26 @@ const Classic = (() => {
   }
 
   // ---------------------------------------------------------------- geometry
-  const wheelBottom = i => GROUND_Y + G.buggy.y + G.buggy.wb[i];
-  const bodyTop = () => GROUND_Y + G.buggy.y - 18 + (G.buggy.wb[0] + G.buggy.wb[2]) / 2;
+  const bodyY = () => (G.buggy.wy[0] + G.buggy.wy[2]) / 2;
+  const bodyAngle = () => clamp(Math.atan2(G.buggy.wy[2] - G.buggy.wy[0], WX[2] - WX[0]), -0.4, 0.4);
   function buggyBox() {
-    const b = G.buggy, t = bodyTop();
-    return { x: b.x + 2, y: t + 6, w: 28, h: GROUND_Y + b.y - (t + 6) };
+    const b = G.buggy, y = bodyY();
+    return { x: b.x + 2.5, y: y - 9, w: 27.5, h: Math.max(...b.wy) + WR - 1.2 - (y - 9) };
   }
-  const OBS_SIZE = { rock: [10, 8], rockBig: [16, 13], mine: [8, 4], tank: [20, 10], boulder: [14, 14] };
+  const OBS_SIZE = { rock: [9, 9], rockBig: [13, 14], mine: [8, 4], tank: [19, 11], boulder: [11, 11] };
   const obsSize = o => OBS_SIZE[o.type === 'rock' && o.big ? 'rockBig' : o.type];
   function obsBox(o) {
     const [w, h] = obsSize(o);
-    return { x: o.x - G.dist, y: GROUND_Y - h, w, h };
+    return { x: o.x - G.dist, y: groundAt(o.x + w / 2) + 1 - h, w, h };
   }
   const ufoBox = u => ({ x: u.x - u.w / 2, y: u.y - u.h / 2, w: u.w, h: u.h });
 
   // ---------------------------------------------------------------- effects
-  function boom(x, y, ground = false, big = false) {
-    G.booms.push({ x, y, t: 0, ground, big });
-  }
+  function boom(x, y, ground = false) { G.booms.push({ x, y, t: 0, ground }); }
   function spark(x, y, n, cols, spd, ground = false, grav = 0.06) {
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, v = 0.3 + Math.random() * spd;
-      G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - spd * 0.4, g: grav, life: 20 + Math.random() * 25, c: pick(Math.random, cols), ground });
+      const a = Math.random() * TAU, v = 0.3 + Math.random() * spd;
+      G.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - spd * 0.4, g: grav, life: 18 + Math.random() * 22, c: cols[Math.floor(Math.random() * cols.length)], ground });
     }
   }
 
@@ -514,35 +636,42 @@ const Classic = (() => {
     AudioSys.sfx.start();
   }
 
+  // Arcade rules: 1,000 points for beating the average time plus 100 per second under it,
+  // and 5,000 more for completing the course at Z.
   function reachCheckpoint(n) {
     const secs = Math.floor(G.segFrames / 60);
     const avg = Math.round((n - G.cp) * SEG / (SPEED_BASE * 60) * 1.1);
     const key = G.course + '-' + n;
     if (!G.demo && (records[key] === undefined || secs < records[key])) { records[key] = secs; Store.save('lp_classic_records', records); }
-    const bonus = 1000 + Math.max(0, avg - secs) * 100;
+    const bonus = (secs <= avg ? 1000 + (avg - secs) * 100 : 0) + (n === 25 ? 5000 : 0);
     addScore(bonus);
     G.panel = { letter: LETTERS[n], secs, avg, rec: records[key] ?? secs, bonus, t: 0, final: n === 25 };
     G.cp = n; G.segFrames = 0;
     if (n < 25) { G.prevTheme = G.theme; G.theme = themeFor(n); G.themeT = 120; }
     for (const u of G.ufos) u.leaving = true;
-    for (const bm of G.bombs) boom(bm.x - 8, bm.y - 8);
-    G.bombs = []; G.shells = []; G.wave = null;
+    for (const bm of G.bombs) boom(bm.x, bm.y);
+    G.bombs = []; G.shells = []; G.wave = null; G.squad = null; G.rocket = null;
     AudioSys.sfx.checkpoint();
   }
 
   function die(cause) {
     if (G.state !== 'play') return;
     G.lastDeath = cause;
-    G.state = 'dying'; G.timer = 170;
-    AudioSys.stopMusic(); AudioSys.sfx.bigBoom();
-    const b = G.buggy, t = bodyTop();
-    boom(b.x + 7, t - 4, false, true);
-    boom(b.x + 16, t - 2, false, true);
-    spark(b.x + 16, t + 4, 30, BOOM_COLS, 2.2);
-    G.debris = WHEEL_DX.map((wx, i) => ({ x: b.x + wx, y: wheelBottom(i) - 8, vx: (i - 1) * 0.8 + (Math.random() - 0.5) * 0.5, vy: -2.4 - Math.random() * 1.5, f: 0 }));
+    G.state = 'dying'; G.timer = 180;
+    AudioSys.stopMusic();
     G.fwd = null; G.ups = [];
     for (const u of G.ufos) u.leaving = true;
-    G.wave = null;
+    G.wave = null; G.rocket = null;
+    if (cause === 'crater') { G.sink = 24; AudioSys.sfx.land(); } else explodeBuggy();
+  }
+
+  function explodeBuggy() {
+    const b = G.buggy, y = bodyY();
+    AudioSys.sfx.bigBoom();
+    boom(b.x + 8, y - 2, true); boom(b.x + 22, y, true);
+    spark(b.x + 16, y - 4, 30, ['#ffffff', C.yellow, C.red, C.mag, C.magHi], 2.2);
+    G.debris = WX.map((wx, i) => ({ x: b.x + wx, y: b.wy[i], vx: (i - 1) * 0.8 + (Math.random() - 0.5) * 0.5, vy: -2.4 - Math.random() * 1.5, f: 0 }));
+    G.debris.push({ body: true, x: b.x + 16, y: y - 4, vx: 0.3, vy: -1.8, a: 0, va: 0.08 });
   }
 
   // ---------------------------------------------------------------- input / autopilot
@@ -555,25 +684,27 @@ const Classic = (() => {
 
   function autopilot() {
     const b = G.buggy, inp = { left: false, right: false, jump: false, fire: false };
-    const front = G.dist + b.x + WHEEL_DX[2] + 6;
+    const front = G.dist + b.x + WX[2] + 2;
     for (const c of G.craters) { const d = c.x - front; if (d > -1 && d < 4) inp.jump = true; }
     for (const o of G.obs) {
-      const d = obsBox(o).x - (b.x + 31);
-      if (o.type === 'mine') { if (d > -1 && d < 4) inp.jump = true; }
+      const d = obsBox(o).x - (b.x + 32);
+      if (o.type === 'mine') { if (d > 3 && d < 9) inp.jump = true; }
       else {
         if (d > 0 && d < 90 && G.frame % 6 === 0) inp.fire = true;
         if (d > 1 && d < (o.big ? 9 : 6)) inp.jump = true;
       }
     }
     for (const s of G.shells) {
-      const d = s.x - G.dist - (b.x + 31);
+      const d = s.x - G.dist - (b.x + 32);
       if (d > 0 && d < 100 && G.frame % 6 === 0) inp.fire = true;
       if (d > 2 && d < 14) inp.jump = true;
     }
+    if (G.rocket && G.rocket.phase === 'dash' && b.x - (G.rocket.x + 26) < 26) inp.jump = true;
     if (G.ufos.length && G.frame % 14 === 0) inp.fire = true;
+    const wide = G.craters.some(c => c.w > 16 && c.x - front > -c.w && c.x - front < 140);
     for (const bm of G.bombs) {
       const t = (GROUND_Y - bm.y) / Math.max(0.4, bm.vy + 0.5);
-      if (bm.x > b.x - 4 && bm.x < b.x + 36 && t < 70) { if (bm.x > b.x + 18) inp.left = true; else inp.right = true; }
+      if (bm.x > b.x - 4 && bm.x < b.x + 36 && t < 70) { if (bm.x > b.x + 18 && !wide) inp.left = true; else inp.right = true; }
     }
     return inp;
   }
@@ -597,7 +728,7 @@ const Classic = (() => {
 
   function updateAttract() {
     G.dist += 0.7;
-    if (G.buggy) updateWheels(G.buggy, 0.7);
+    updateBuggy(G.buggy, 0.7);
     if (--G.timer <= 0) {
       if (G.state === 'title') { G.state = 'points'; G.timer = 480; }
       else if (G.state === 'points') startDemo();
@@ -606,20 +737,24 @@ const Classic = (() => {
   }
 
   function updateReady() {
-    updateWheels(G.buggy, 0);
+    updateBuggy(G.buggy, 0);
     if (--G.timer <= 0) { G.state = 'play'; AudioSys.startMusic('classic'); }
   }
 
-  // Each wheel rides its own little spring, so the buggy jostles over the surface like the original.
-  function updateWheels(b, speed) {
+  // Each wheel rides its own shock absorber and follows the bumps; the body pitches with them.
+  function updateBuggy(b, speed) {
     for (let i = 0; i < 3; i++) {
-      const target = b.air ? 1.5 : 0;
-      b.wv[i] += (target - b.wb[i]) * 0.3;
-      b.wv[i] *= 0.7;
-      b.wb[i] += b.wv[i];
-      if (!b.air && speed > 0 && Math.random() < 0.02 * speed) b.wv[i] -= 0.6 + Math.random() * 0.5;
+      const g = groundAt(G.dist + b.x + WX[i]) - WR;
+      if (b.air) {
+        b.wv[i] += (b.cy + 1.8 - b.wy[i]) * 0.35; b.wv[i] *= 0.6; b.wy[i] += b.wv[i];
+        if (b.wy[i] > g) { b.wy[i] = g; b.wv[i] = 0; }
+      } else {
+        b.wv[i] += (g - b.wy[i]) * 0.42; b.wv[i] *= 0.64; b.wy[i] += b.wv[i];
+        if (b.wy[i] > g + 0.5) { b.wy[i] = g + 0.5; b.wv[i] = Math.min(0, b.wv[i]); }
+        if (speed > 0 && Math.random() < 0.01 * speed) b.wv[i] -= 0.4 + Math.random() * 0.4;
+      }
     }
-    b.spin += speed * 0.25;
+    b.spin += speed / WR;
   }
 
   function updatePlay(inp) {
@@ -636,23 +771,25 @@ const Classic = (() => {
     ensureGenerated();
 
     if (inp.jump && !b.air) {
-      b.air = true; b.vy = -JUMP_V; AudioSys.sfx.jump();
-      for (let i = 0; i < 3; i++) b.wv[i] += 0.6;
+      b.air = true; b.cy = (b.wy[0] + b.wy[1] + b.wy[2]) / 3; b.vy = -JUMP_V; AudioSys.sfx.jump();
+      for (let i = 0; i < 3; i++) b.wv[i] = -JUMP_V * (0.85 + i * 0.05);
     }
     if (b.air) {
-      b.vy += GRAV; b.y += b.vy;
-      if (b.y >= 0) {
-        b.y = 0; b.vy = 0; b.air = false; AudioSys.sfx.land();
-        for (let i = 0; i < 3; i++) b.wv[i] += 1.1;
+      b.vy += GRAV; b.cy += b.vy;
+      const g = WX.reduce((s, x) => s + groundAt(G.dist + b.x + x), 0) / 3 - WR;
+      if (b.vy > 0 && b.cy >= g) {
+        b.air = false; AudioSys.sfx.land();
+        for (let i = 0; i < 3; i++) b.wv[i] += 1.3;
       }
     }
-    updateWheels(b, G.speed);
+    updateBuggy(b, G.speed);
     if (inp.fire) fire();
 
     updateShots();
     updateObstacles();
     updateShells();
     updateWaves();
+    updateRocket();
     updateUfos();
     updateBombs();
     updateEffects();
@@ -669,20 +806,22 @@ const Classic = (() => {
   }
 
   function fire() {
-    const b = G.buggy, t = bodyTop();
+    const b = G.buggy, y = bodyY(), a = bodyAngle();
     let shot = false;
-    if (!G.fwd) { G.fwd = { x: b.x + 31, y: t + 10, x0: b.x + 31 }; shot = true; }
-    if (G.ups.length < 3) { G.ups.push({ x: b.x + 2, y: t - 4 }); shot = true; }
+    if (!G.fwd) { G.fwd = { x: b.x + 33, x0: b.x + 33, y: y - 6 + a * 17 }; shot = true; }
+    if (G.ups.length < 4) { G.ups.push({ x: b.x + 9.8, y: y - 16 - a * 6 }); shot = true; }
     if (shot) AudioSys.sfx.fire();
   }
 
   function updateShots() {
     const f = G.fwd;
     if (f) {
-      f.x += 4.2;
-      if (f.x - f.x0 > 118 || f.x > W) { G.fwd = null; spark(f.x, f.y, 3, ['#ffd23f', '#ff8a1f'], 0.6); }
+      // The cannon shell skims the surface at a fixed height, so it climbs and dips with the road.
+      f.x += 3.4;
+      f.y += (groundAt(G.dist + f.x + 7) - 6.5 - f.y) * 0.35;
+      if (f.x - f.x0 > 120 || f.x > W) { G.fwd = null; boom(f.x + 7, f.y + 1); }
     }
-    for (const u of G.ups) u.y -= 4;
+    for (const u of G.ups) u.y -= 4.2;
     G.ups = G.ups.filter(u => u.y > HUD_H);
   }
 
@@ -690,10 +829,10 @@ const Classic = (() => {
     const bx = G.buggy.x;
     for (const o of G.obs) {
       const sx = o.x - G.dist;
-      if (o.type === 'boulder' && sx < ENGAGE) { o.x -= 0.45; o.rot = (o.rot || 0) + 0.12; }
+      if (o.type === 'boulder' && sx < ENGAGE) { o.x -= 0.45; o.rot = (o.rot || 0) + 0.09; }
       if (o.type === 'tank' && sx < ENGAGE && sx > bx + 36) {
         if (--o.cd <= 0) {
-          G.shells.push({ x: o.x - 4, y: GROUND_Y - 8 });
+          G.shells.push({ x: o.x - 2 });
           o.cd = 100 + Math.floor(Math.random() * 60);
           AudioSys.sfx.tank();
         }
@@ -701,6 +840,7 @@ const Classic = (() => {
     }
   }
 
+  const shellBox = s => ({ x: s.x - G.dist, y: groundAt(s.x) - 7.5, w: 4, h: 2 });
   function updateShells() {
     for (const s of G.shells) s.x -= 1.5;
     G.shells = G.shells.filter(s => s.x - G.dist > -10);
@@ -709,9 +849,16 @@ const Classic = (() => {
   function updateWaves() {
     const ahead = G.dist + W * 0.5;
     for (const t of G.triggers) {
-      if (!t.used && t.x < ahead && !G.wave && !G.ufos.length) {
+      if (t.used || t.x > ahead) continue;
+      if (t.kind === 'rocket') {
+        if (G.rocket) continue;
+        t.used = true;
+        G.rocket = { x: -28, phase: 'wait', t: 0 };
+        AudioSys.sfx.alarm();
+      } else if (!G.wave && !G.ufos.length) {
         t.used = true;
         G.wave = { type: t.type, left: t.n, cd: 0 };
+        G.squad = { size: t.n, killed: 0 };
         AudioSys.sfx.alarm();
       }
     }
@@ -724,10 +871,21 @@ const Classic = (() => {
     }
   }
 
+  // Rocket car: waits behind the buggy, then charges along the ground. Jump it.
+  function updateRocket() {
+    const r = G.rocket;
+    if (!r) return;
+    r.t++;
+    if (r.phase === 'wait') { r.x += (2 - r.x) * 0.05; if (r.t > 70) { r.phase = 'dash'; AudioSys.sfx.go(); } }
+    else r.x += 3.6;
+    if (r.x > W + 30) G.rocket = null;
+  }
+  const rocketBox = r => ({ x: r.x + 6, y: groundAt(G.dist + r.x + 14) - 8, w: 19, h: 7 });
+
   function spawnUfo(type, i) {
-    const [w, h] = type === 3 ? [12, 7] : type === 2 ? [16, 9] : [16, 7];
+    const [w, h] = type === 3 ? [15, 12] : [19, 9];
     G.ufos.push({
-      type, w, h, x: -10 - i * 6, y: HUD_H + 14 + (i % 3) * 10, vx: 1.6, vy: 0.2,
+      type, w, h, x: -12 - i * 6, y: HUD_H + 14 + (i % 3) * 10, vx: 1.6, vy: 0.2,
       tx: 60 + Math.random() * (ENGAGE - 80), ty: HUD_H + 14 + Math.random() * 46,
       cd: 60 + Math.floor(Math.random() * 60), life: 1000 + Math.floor(Math.random() * 200), leaving: false, f: Math.random() * 40,
     });
@@ -739,92 +897,114 @@ const Classic = (() => {
       u.f++;
       if (u.leaving || --u.life <= 0) { u.leaving = true; u.vy -= 0.06; u.vx *= 0.98; }
       else {
-        // Jerky arcade movement: pick a new point near the buggy, dart to it, repeat.
+        // Weaving arcade flight: pick a point near the buggy, dart to it, repeat.
         if (Math.hypot(u.tx - u.x, u.ty - u.y) < 4 || u.f % 90 === 0) {
-          const spread = u.type === 3 ? 60 : 110;
-          u.tx = clamp(b.x + 16 + (Math.random() - 0.4) * spread * 2, 14, Math.min(W, ENGAGE + 20) - 14);
-          u.ty = u.type === 3 ? HUD_H + 30 + Math.random() * 70 : HUD_H + 12 + Math.random() * 50;
+          const spread = u.type === 3 ? 70 : 110;
+          u.tx = clamp(b.x + 16 + (Math.random() - 0.35) * spread * 2, 14, Math.min(W, ENGAGE + 20) - 14);
+          u.ty = HUD_H + 10 + Math.random() * (u.type === 2 ? 64 : 50);
         }
-        const sp = u.type === 3 ? 2.1 : u.type === 2 ? 1.1 : 1.4;
+        const sp = u.type === 3 ? 1.2 : u.type === 2 ? 1.6 : 1.4;
         u.vx += clamp(u.tx - u.x, -sp, sp) * 0.06; u.vy += clamp(u.ty - u.y, -sp, sp) * 0.06;
         u.vx *= 0.9; u.vy *= 0.9;
-        if (--u.cd <= 0 && G.state === 'play' && u.y < GROUND_Y - 50) {
-          G.bombs.push({ x: u.x, y: u.y + u.h / 2, vx: u.vx * 0.3, vy: 0.4, crater: u.type === 2 });
-          u.cd = (u.type === 3 ? 55 : 80) + Math.floor(Math.random() * 70);
-          AudioSys.sfx.bomb();
-        }
+        if (--u.cd <= 0 && G.state === 'play' && u.y < GROUND_Y - 60) dropBomb(u);
       }
       u.x += u.vx; u.y += u.vy;
     }
     G.ufos = G.ufos.filter(u => u.y > HUD_H - 20 && u.x > -40 && u.x < W + 40);
   }
 
+  function dropBomb(u) {
+    const b = G.buggy;
+    if (u.type === 3) {
+      // Grenade lobbed onto the road ahead of the buggy; it blasts a fresh crater.
+      const target = b.x + 50 + Math.random() * 60, t = Math.sqrt(2 * (GROUND_Y - u.y) / 0.03);
+      G.bombs.push({ x: u.x, y: u.y + 4, vx: clamp((target - u.x) / t, -1.2, 1.4), vy: -0.4, g: 0.03, grenade: true });
+      u.cd = 110 + Math.floor(Math.random() * 60);
+    } else {
+      // Bombs fall towards where the buggy is heading; the second saucer aims better.
+      const lead = u.type === 2 ? 1 : 0.4, t = (GROUND_Y - u.y) / 1.2;
+      const aim = b.x + 16 + (G.speed - SPEED_BASE) * t * lead * 0.5;
+      G.bombs.push({ x: u.x, y: u.y + 4, vx: clamp((aim - u.x) / t * lead, -0.6, 0.6), vy: 0.4, g: 0.02 });
+      u.cd = (u.type === 2 ? 60 : 85) + Math.floor(Math.random() * 70);
+    }
+    AudioSys.sfx.bomb();
+  }
+
   function updateBombs() {
     for (const bm of G.bombs) {
-      bm.vy = Math.min(1.6, bm.vy + 0.02); bm.y += bm.vy; bm.x += bm.vx;
-      if (bm.y >= GROUND_Y - 2) {
+      bm.vy = Math.min(1.7, bm.vy + bm.g); bm.y += bm.vy; bm.x += bm.vx;
+      const g = groundAt(G.dist + bm.x);
+      if (bm.y >= g - 2) {
         bm.dead = true;
-        boom(bm.x - 8.5, GROUND_Y - 14, true);
+        boom(bm.x, g - 1, true);
         AudioSys.sfx.boom();
-        if (bm.crater) addBombCrater(G.dist + bm.x);
+        if (bm.grenade) addBombCrater(G.dist + bm.x);
       }
     }
     G.bombs = G.bombs.filter(bm => !bm.dead);
   }
 
   function addBombCrater(wx) {
-    const w = 11, x = Math.round(wx - w / 2);
-    if (G.craters.some(c => x < c.x + c.w + 4 && x + w + 4 > c.x)) return;
-    if (G.obs.some(o => x < o.x + 20 && x + w > o.x - 4)) return;
-    G.craters.push({ x, w, depth: 8, passed: false, fresh: 30 });
+    const w = 10, x = Math.round(wx - w / 2);
+    // Keep a clear landing strip between pits, and keep clear of rocks and mines.
+    if (G.craters.some(c => x < c.x + c.w + 72 && x + w + 72 > c.x)) return;
+    if (G.obs.some(o => x < o.x + 60 && x + w + 60 > o.x)) return;
+    // Never open a pit under the buggy or too close in front of it to react.
+    const bx = G.dist + G.buggy.x;
+    if (x < bx + 33 + 28 && x + w > bx - 4) return;
+    G.craters.push({ x, w, depth: 6, passed: false, small: true, seed: craterSeed++, fresh: 40 });
   }
 
   function updateEffects(scroll = G.speed) {
     for (const p of G.parts) { p.vy += p.g; p.x += p.vx - (p.ground ? scroll : 0); p.y += p.vy; p.life--; }
     G.parts = G.parts.filter(p => p.life > 0 && p.y < H);
     for (const bm of G.booms) { bm.t++; if (bm.ground) bm.x -= scroll; }
-    G.booms = G.booms.filter(bm => bm.t < 24);
+    G.booms = G.booms.filter(bm => bm.t < 28);
     for (const t of G.texts) { t.life--; t.y -= 0.25; if (t.ground) t.x -= scroll; }
     G.texts = G.texts.filter(t => t.life > 0);
     for (const c of G.craters) if (c.fresh) c.fresh--;
   }
 
   function hitObstacle(o) {
-    const box = obsBox(o), cx = box.x + box.w / 2 - 9, cy = box.y + box.h / 2 - 9;
-    if (o.type === 'rock' && o.big) { o.big = false; boom(cx, cy + 2, true); spark(cx + 9, cy + 9, 8, ROCK_PAL, 1.2, true); addScore(50, cx + 9, cy, true); AudioSys.sfx.hit(); return; }
+    const bx = obsBox(o), cx = bx.x + bx.w / 2, cy = bx.y + bx.h;
+    if (o.type === 'rock' && o.big) { o.big = false; boom(cx, cy, true); spark(cx, cy - 6, 8, ['#cc922a', '#f4d47c', '#8c7c20'], 1.2, true); addScore(50, cx, cy - 16, true); AudioSys.sfx.hit(); return; }
     o.dead = true;
-    boom(cx, cy, true); spark(cx + 9, cy + 9, 10, o.type === 'tank' ? ['#5f9e2f', '#a8dd6b', '#ffd23f'] : ROCK_PAL, 1.3, true);
-    addScore(o.type === 'tank' ? 200 : 100, cx + 9, cy, true);
+    boom(cx, cy, true); spark(cx, cy - 5, 10, o.type === 'tank' ? ['#5c8ef0', '#9ec4ff', C.yellow] : ['#cc922a', '#f4d47c', '#8c7c20'], 1.3, true);
+    addScore({ tank: 200, boulder: 50 }[o.type] || 100, cx, cy - 16, true);
     AudioSys.sfx.boom();
   }
 
   function killUfo(u) {
     u.dead = true;
-    boom(u.x - 9, u.y - 9);
-    spark(u.x, u.y, 12, BOOM_COLS, 1.4, false, 0.04);
-    addScore({ 1: 100, 2: 200, 3: 300 }[u.type], u.x, u.y);
+    boom(u.x, u.y);
+    addScore(u.type === 3 ? 200 : 100, u.x, u.y);
     AudioSys.sfx.ufoKill();
+    const sq = G.squad;
+    if (sq && ++sq.killed === sq.size && sq.size >= 3) {
+      addScore({ 3: 500, 4: 800, 5: 1000 }[Math.min(5, sq.size)], u.x, u.y + 10);
+      G.squad = null;
+    }
   }
 
   function collide() {
     const b = G.buggy, bb = buggyBox();
-    // Forward shot vs ground targets and shells.
+    // Cannon shell vs ground targets and tank shells (shells cancel each other out).
     if (G.fwd) {
-      const fb = { x: G.fwd.x, y: G.fwd.y, w: 6, h: 2 };
+      const fb = { x: G.fwd.x, y: G.fwd.y, w: 9, h: 3 };
       for (const o of G.obs) {
         if (o.dead || o.type === 'mine') continue;
         if (overlap(fb, obsBox(o))) { hitObstacle(o); G.fwd = null; break; }
       }
       if (G.fwd) for (const s of G.shells) {
-        if (overlap(fb, { x: s.x - G.dist, y: s.y, w: 4, h: 2 })) { s.dead = true; G.fwd = null; boom(s.x - G.dist - 7, s.y - 8, true); addScore(50, s.x - G.dist, s.y - 4, true); AudioSys.sfx.hit(); break; }
+        if (overlap(fb, shellBox(s))) { s.dead = true; G.fwd = null; boom(s.x - G.dist, groundAt(s.x) - 4, true); AudioSys.sfx.hit(); break; }
       }
     }
-    // Upward shots vs saucers and bombs.
+    // Anti-air shots vs saucers, bombs and grenades.
     for (const sh of G.ups) {
-      const sb = { x: sh.x, y: sh.y, w: 3, h: 5 };
+      const sb = { x: sh.x, y: sh.y, w: 1.4, h: 5 };
       for (const u of G.ufos) if (!u.dead && !u.leaving && overlap(sb, ufoBox(u))) { killUfo(u); sh.dead = true; break; }
       if (sh.dead) continue;
-      for (const bm of G.bombs) if (!bm.dead && overlap(sb, { x: bm.x - 2, y: bm.y - 2, w: 5, h: 6 })) { bm.dead = true; sh.dead = true; boom(bm.x - 9, bm.y - 9); addScore(50, bm.x, bm.y); AudioSys.sfx.hit(); break; }
+      for (const bm of G.bombs) if (!bm.dead && overlap(sb, { x: bm.x - 2.5, y: bm.y - 1, w: 5, h: 7 })) { bm.dead = true; sh.dead = true; boom(bm.x, bm.y); addScore(100, bm.x, bm.y); AudioSys.sfx.hit(); break; }
     }
     G.ups = G.ups.filter(s => !s.dead);
     G.ufos = G.ufos.filter(u => !u.dead);
@@ -836,23 +1016,24 @@ const Classic = (() => {
     if (!b.air) {
       for (const c of G.craters) {
         for (let i = 0; i < 3; i++) {
-          const wx = G.dist + b.x + WHEEL_DX[i] + 4;
+          const wx = G.dist + b.x + WX[i];
           if (wx > c.x + 2.5 && wx < c.x + c.w - 2.5) { die('crater'); return; }
         }
       }
     }
     for (const o of G.obs) if (overlap(bb, obsBox(o))) { die(o.type); return; }
-    for (const s of G.shells) if (overlap(bb, { x: s.x - G.dist, y: s.y, w: 4, h: 2 })) { die('shell'); return; }
-    for (const bm of G.bombs) if (overlap(bb, { x: bm.x - 1, y: bm.y, w: 3, h: 4 })) { die('bomb'); return; }
+    for (const s of G.shells) if (overlap(bb, shellBox(s))) { die('shell'); return; }
+    for (const bm of G.bombs) if (overlap(bb, { x: bm.x - 1.5, y: bm.y, w: 3, h: 6 })) { die('bomb'); return; }
+    if (G.rocket && G.rocket.phase === 'dash' && overlap(bb, rocketBox(G.rocket))) die('rocket');
   }
 
   function checkPasses() {
     const rear = G.dist + G.buggy.x;
     for (const c of G.craters) if (!c.passed && c.x + c.w < rear) { c.passed = true; addScore(50, c.x + c.w / 2 - G.dist, GROUND_Y - 30, true); }
     for (const o of G.obs) {
-      if (o.passed || o.type === 'tank') continue;
+      if (o.passed || o.type === 'tank' || o.type === 'boulder') continue;
       const [w] = obsSize(o);
-      if (o.x + w < rear) { o.passed = true; addScore(o.type === 'mine' ? 100 : 80, o.x + w / 2 - G.dist, GROUND_Y - 30, true); }
+      if (o.x + w < rear) { o.passed = true; addScore(50, o.x + w / 2 - G.dist, GROUND_Y - 30, true); }
     }
   }
 
@@ -863,11 +1044,26 @@ const Classic = (() => {
   }
 
   function updateDying() {
-    for (const d of G.debris) {
-      d.vy += 0.12; d.x += d.vx; d.y += d.vy; d.f += d.vx * 0.5;
-      if (d.y > GROUND_Y - 8) { d.y = GROUND_Y - 8; d.vy *= -0.45; d.vx *= 0.7; if (Math.abs(d.vy) < 0.4) d.vy = 0; }
+    const b = G.buggy;
+    if (G.sink > 0) {
+      // Nose-dive into the pit before the blast.
+      G.sink--;
+      for (let i = 0; i < 3; i++) b.wy[i] += 0.3 + i * 0.12;
+      if (G.sink === 0) explodeBuggy();
     }
-    if (G.timer > 120 && G.timer % 10 === 0) boom(G.buggy.x + Math.random() * 24 - 4, bodyTop() - 6 + Math.random() * 6, false, true);
+    for (const d of G.debris) {
+      d.vy += 0.12; d.x += d.vx; d.y += d.vy;
+      if (d.body) {
+        d.a += d.va;
+        const fl = groundAt(G.dist + d.x) - 5;
+        if (d.y > fl) { d.y = fl; d.vy *= -0.3; d.vx *= 0.6; d.va *= 0.5; }
+        continue;
+      }
+      d.f += d.vx * 0.5;
+      const floor = groundAt(G.dist + d.x) - WR;
+      if (d.y > floor) { d.y = floor; d.vy *= -0.45; d.vx *= 0.7; if (Math.abs(d.vy) < 0.4) d.vy = 0; }
+    }
+    if (!G.sink && G.timer > 130 && G.timer % 12 === 0) boom(b.x + 4 + Math.random() * 24, bodyY() + Math.random() * 3, true);
     updateUfos(); updateBombs(); updateShells(); updateEffects(0);
     if (--G.timer <= 0) {
       if (G.demo) { toAttract('scores'); return; }
@@ -896,17 +1092,17 @@ const Classic = (() => {
     G.hi = Math.max(G.hi, scores[0].score);
   }
 
-  // ---------------------------------------------------------------- pixel renderer
+  // ---------------------------------------------------------------- renderer
   // Logical coordinates are snapped to whole device pixels, so sprites keep hard edges at any scale.
   const DX = x => Math.round(x * SX), DY = y => Math.round(y * SY);
   function rect(x, y, w, h, col) {
     const X = DX(x), Y = DY(y);
     ctx.fillStyle = col; ctx.fillRect(X, Y, Math.max(1, DX(x + w) - X), Math.max(1, DY(y + h) - Y));
   }
-  function blit(img, x, y, alpha = 1) {
+  function blit(img, x, y, alpha = 1, scale = 1) {
     const X = DX(x), Y = DY(y);
     if (alpha !== 1) ctx.globalAlpha = alpha;
-    ctx.drawImage(img, X, Y, DX(x + img.width) - X, DY(y + img.height) - Y);
+    ctx.drawImage(img, X, Y, DX(x + img.lw * scale) - X, DY(y + img.lh * scale) - Y);
     if (alpha !== 1) ctx.globalAlpha = 1;
   }
   function text(str, x, y, col, align = 'left', size = 8, outline = y > HUD_H) {
@@ -921,165 +1117,231 @@ const Classic = (() => {
     ctx.fillText(str, DX(x), DY(y));
   }
   function strip(img, scroll, y, alpha = 1) {
-    const w = img.width;
+    const w = img.lw;
     const off = -(((scroll % w) + w) % w);
     for (let x = off; x < W; x += w) blit(img, x, y, alpha);
   }
 
-  function drawSky() {
-    rect(0, 0, W, H, '#000000');
-    for (const s of BG.stars) {
-      const x = ((s.x - G.dist * 0.04) % 1024 + 1024) % 1024;
-      if (x > W) continue;
-      if (((G.frame + s.tw) >> 5) % 6 === 0) continue;
-      rect(x, s.y, 1, 1, s.c);
-    }
-  }
-
   function drawBackdrop() {
-    strip(BG.mountains, G.dist * 0.08, GROUND_Y - 30 - MOUNT_H);
-    rect(0, GROUND_Y - 30, W, 30, '#123a7a');
-    const midY = GROUND_Y - MID_H;
+    rect(0, HUD_H, W, H - HUD_H, C.sky);
+    const mY = GROUND_Y - 40 - MOUNT_H;
+    strip(BG.mountains, G.dist * 0.1, mY);
+    rect(0, mY + MOUNT_H - 0.5, W, 40, C.teal);
+    const hY = GROUND_Y + 6 - HILL_H;
     const layer = th => th ? BG.city : BG.hills;
     if (G.themeT > 0) {
       const k = G.themeT / 120;
-      strip(layer(G.prevTheme), G.dist * 0.3, midY, k);
-      strip(layer(G.theme), G.dist * 0.3, midY, 1 - k);
-    } else strip(layer(G.theme), G.dist * 0.3, midY);
-    strip(BG.ground, G.dist, GROUND_Y);
+      strip(layer(G.prevTheme), G.dist * 0.32, hY, k);
+      strip(layer(G.theme), G.dist * 0.32, hY, 1 - k);
+    } else strip(layer(G.theme), G.dist * 0.32, hY);
+    rect(0, hY + HILL_H - 0.5, W, H - hY - HILL_H + 1, C.green);   // behind dips in the road
   }
 
-  function drawCraters() {
-    for (const c of G.craters) {
-      const sx = c.x - G.dist;
-      if (sx > W || sx + c.w < 0) continue;
-      for (let i = 0; i < c.w; i++) {
-        const t = (i + 0.5) / c.w;
-        const d = Math.max(2, Math.round(c.depth * Math.pow(Math.sin(Math.PI * t), 0.55)));
-        rect(sx + i, GROUND_Y, 1, d, '#000000');
-        rect(sx + i, GROUND_Y + d, 1, 1, '#5e2f10');
-        if (t > 0.55) rect(sx + i, GROUND_Y + d - 1, 1, 1, '#2a1406');
-      }
-      rect(sx - 1, GROUND_Y - 1, 2, 1, '#ffd29a');
-      rect(sx + c.w - 1, GROUND_Y - 1, 2, 1, '#8a4a1c');
-      if (c.fresh) for (let i = 0; i < 4; i++) rect(sx + Math.random() * c.w, GROUND_Y - 2 - Math.random() * 4, 1, 1, '#e8a45a');
+  // The road: a lumpy surface traced at fine resolution, filled with the ground texture.
+  function drawGround() {
+    const step = 1 / D;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(DX(-1), DY(H));
+    for (let x = -1; x <= W + 1; x += step) ctx.lineTo(DX(x), DY(surfaceVis(G.dist + x)));
+    ctx.lineTo(DX(W + 1), DY(H));
+    ctx.closePath();
+    ctx.clip();
+    strip(BG.ground, G.dist, GROUND_Y - 12);
+    ctx.restore();
+    // Sunlit lip along the crest, and a little loose grit on the surface.
+    for (let x = 0; x < W; x += step) {
+      const wx = G.dist + x, g = surfaceVis(wx), s = groundAt(wx + 0.6) - groundAt(wx - 0.6);
+      if (g - groundAt(wx) < 0.5) rect(x, g, step, step, s <= 0 ? C.peachHi : '#ffb67c');
+    }
+    const first = Math.floor(G.dist);
+    for (let wx = first; wx < first + W + 2; wx++) {
+      const hsh = hash2(wx, 7);
+      if (hsh > 0.06) continue;
+      const g = groundAt(wx + 0.5), sz = hsh < 0.02 ? 1.4 : 0.8;
+      rect(wx - G.dist, g - sz + 0.3, sz, sz, C.peachLo);
+      rect(wx - G.dist, g - sz + 0.3, sz * 0.5, step, C.peachHi);
     }
   }
 
-  function drawSigns() {
-    for (let i = 0; i < 26; i++) {
-      const sx = letterX(i) - G.dist;
-      if (sx < -12 || sx > W + 2) continue;
-      const cp = CHECKPOINTS.includes(i);
-      rect(sx + 4, GROUND_Y - 22, 1, 22, '#d6dde6');
-      rect(sx, GROUND_Y - 31, 10, 10, cp ? '#ff3b30' : '#ffd23f');
-      rect(sx + 1, GROUND_Y - 30, 8, 8, cp ? '#ffd23f' : '#1d2026');
-      text(LETTERS[i], sx + 1, GROUND_Y - 30, cp ? '#1d2026' : '#ffd23f', 'left', 8);
+  // Craters: the road drops into a ragged bowl, so the scenery shows through the pit. The near
+  // slope is in shadow, the far slope catches the sun, loose rubble lies on the floor and clods of
+  // ejecta sit on both lips. Fresh craters from grenades still smoke.
+  function drawCraters() {
+    const step = 1 / D;
+    for (const c of G.craters) {
+      const sx = c.x - G.dist;
+      if (sx > W + 6 || sx + c.w < -6) continue;
+      const n = Math.round(c.w * D);
+      // Far inner wall, seen through the pit: sunlit at the rim, darker towards the floor, with the
+      // near lip's shadow falling across its left side.
+      const FAR = ['#e8955a', '#cf7a42', '#b0602e', '#8a4620', '#6a3214'];
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.5) / n, x = sx + i * step, wx = c.x + t * c.w;
+        const top = groundAt(wx) - 0.6 - (noise1(wx * 1.3, c.seed + 3) - 0.3) * 1.1, bot = surfaceVis(wx);
+        const h = bot - top;
+        if (h <= 0) continue;
+        const shadow = t < 0.55 ? Math.round((0.55 - t) * 6) : 0;
+        for (let k = 0; k < FAR.length; k++) {
+          const y0 = top + h * k / FAR.length;
+          rect(x, y0, step, h / FAR.length + step, FAR[Math.min(FAR.length - 1, k + shadow)]);
+        }
+        if (t > 0.3) rect(x, top, step, step, '#ffd2a2');
+        // Strata lines in the wall.
+        for (let k = 1; k < 3; k++) {
+          const y = top + h * (0.22 * k) + (noise1(wx * 0.7, c.seed + k * 9) - 0.5) * 1.2;
+          if (y < bot - 1 && hash2(Math.floor(wx * 3), k + c.seed) > 0.25) rect(x, y, step, step, shadow ? '#7a3a18' : '#f0a466');
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const t = (i + 0.5) / n, x = sx + i * step, wx = c.x + t * c.w;
+        const y = surfaceVis(wx), slope = surfaceVis(wx + 0.5) - surfaceVis(wx - 0.5);
+        if (slope > 0.05) {                               // near slope, facing away from the light
+          rect(x, y, step, 1.6, '#a85628');
+          rect(x, y + 1.6, step, 1.6, '#c86e38');
+        } else if (slope < -0.05) {                       // far slope, sunlit
+          rect(x, y, step, step, '#fff0d0');
+          rect(x, y + step, step, 1.2, C.peachHi);
+          rect(x, y + 1.2 + step, step, 1.4, '#ffb47a');
+        } else {
+          rect(x, y, step, 1.2, '#b86030');
+        }
+        // Shadow cast by the near lip across the floor.
+        const shade = clamp(1 - t * 2.2, 0, 1);
+        if (shade > 0) rect(x, y, step, 3 * shade + 0.6, 'rgba(70,24,4,0.55)');
+      }
+      // Rubble on the floor.
+      for (let k = 0; k < c.w / 2.2; k++) {
+        const t = 0.25 + hash2(k, c.seed) * 0.5, wx = c.x + t * c.w;
+        const y = surfaceVis(wx), s = 0.6 + hash2(k + 9, c.seed) * 1.1;
+        rect(sx + t * c.w, y - s * 0.7, s, s * 0.8, '#9a4c22');
+        rect(sx + t * c.w, y - s * 0.7, s * 0.5, step, '#ffc896');
+      }
+      // Ejecta clods on the lips.
+      for (const [edge, dir] of [[c.x, -1], [c.x + c.w, 1]]) {
+        for (let k = 0; k < 6; k++) {
+          const wx = edge + dir * (0.4 + hash2(k, c.seed + 50) * 5), g = groundAt(wx), s = 0.6 + hash2(k, c.seed + 60) * 0.9;
+          rect(wx - G.dist, g - s * 0.6, s, s * 0.8, k % 2 ? '#d07a40' : '#e8935a');
+          rect(wx - G.dist, g - s * 0.6, s * 0.5, step, C.peachHi);
+        }
+      }
+      if (c.fresh) for (let k = 0; k < 6; k++) rect(sx + Math.random() * c.w, surfaceVis(c.x + c.w / 2) - 2 - Math.random() * (c.fresh / 4), 0.8, 0.8, C.smoke);
     }
   }
 
   function drawObstacles() {
     for (const o of G.obs) {
-      const box = obsBox(o);
-      if (box.x > W + 4 || box.x + box.w < -4) continue;
-      if (o.type === 'rock') blit(o.big ? ROCK_L : ROCK_S, box.x, box.y);
-      else if (o.type === 'mine') blit(MINE[(G.frame >> 4) & 1], box.x, box.y);
-      else if (o.type === 'tank') blit(TANK, box.x, box.y);
-      else if (o.type === 'boulder') blit(BOULDER[Math.floor((o.rot || 0) * 2) & 3 ^ 3], box.x, box.y);
+      const bx = obsBox(o);
+      if (bx.x > W + 4 || bx.x + bx.w < -4) continue;
+      if (o.type === 'rock') blit(o.big ? ROCK_L : ROCK_S, bx.x, bx.y);
+      else if (o.type === 'mine') blit(MINE[(G.frame >> 4) & 1], bx.x, bx.y);
+      else if (o.type === 'tank') blit(TANK, bx.x, bx.y);
+      else if (o.type === 'boulder') blit(BOULDER[(8 - (Math.floor((o.rot || 0) * 4) & 7)) & 7], bx.x, bx.y);
     }
-    for (const s of G.shells) blit(SHELL, s.x - G.dist, s.y);
+    for (const s of G.shells) {
+      const sb = shellBox(s);
+      rect(sb.x, sb.y, 2.4, 2, C.red); rect(sb.x + 2.4, sb.y + 0.5, 2.6, 1, C.yellow);
+    }
+    const r = G.rocket;
+    if (r && (r.phase === 'dash' || (r.t >> 3) & 1)) blit(ROCKET[(G.frame >> 2) & 1], r.x, groundAt(G.dist + r.x + 14) - 9);
   }
 
-  function drawBuggyAt(bx, top, wb, spin) {
-    const wf = Math.floor(spin) & 1;
-    for (let i = 0; i < 3; i++) {
-      const wy = top + 18 + wb[i] - 8;
-      rect(bx + WHEEL_DX[i] + 3.5, top + 10, 1, wy - top - 9, '#7b8592');
-      blit(WHEELS[wf], bx + WHEEL_DX[i], wy);
-    }
-    blit(BUGGY, bx, top);
+  function drawBuggyAt(bx, wy, angle, spin) {
+    const cy = (wy[0] + wy[2]) / 2;
+    ctx.save();
+    ctx.translate(DX(bx + 16), DY(cy));
+    ctx.rotate(angle);
+    ctx.drawImage(BUGGY, Math.round(-16 * SX), Math.round(-16 * SY), Math.round(33 * SX), Math.round(17 * SY));
+    ctx.restore();
+    const wf = Math.floor(spin / (Math.PI / 4) * 8) & 7;
+    for (let i = 0; i < 3; i++) blit(WHEEL[wf], bx + WX[i] - 4, wy[i] - 4);
   }
 
   function drawBuggy() {
     const b = G.buggy;
-    drawBuggyAt(b.x, bodyTop(), b.wb.map(v => v - (b.wb[0] + b.wb[2]) / 2), b.spin);
+    drawBuggyAt(b.x, b.wy, bodyAngle() + (G.state === 'dying' ? (24 - G.sink) * 0.02 : 0), b.spin);
   }
 
   function drawAir() {
     for (const u of G.ufos) {
       const img = (u.type === 1 ? UFO1 : u.type === 2 ? UFO2 : UFO3)[(u.f >> 3) & 1];
-      blit(img, u.x - img.width / 2, u.y - img.height / 2);
+      blit(img, u.x - img.lw / 2, u.y - img.lh / 2);
     }
-    for (const bm of G.bombs) blit(BOMB[(G.frame >> 2) & 1], bm.x - 1.5, bm.y);
-    for (const s of G.ups) blit(UP_SHOT, s.x, s.y);
+    for (const bm of G.bombs) {
+      if (bm.grenade) blit(GRENADE[(G.frame >> 2) & 1], bm.x - 1.5, bm.y);
+      else blit(BOMB[(G.frame >> 3) & 1], bm.x - 2.5, bm.y);
+    }
+    for (const s of G.ups) blit(UP_SHOT, s.x - 0.7, s.y);
     if (G.fwd) blit(FWD_SHOT, G.fwd.x, G.fwd.y);
   }
 
   function drawEffects() {
     for (const bm of G.booms) {
-      const f = Math.min(3, bm.t >> 2);
-      if (bm.big) blit(BOOM[f], bm.x - 4, bm.y - 4);
-      blit(BOOM[f], bm.x, bm.y, bm.t > 18 ? 0.5 : 1);
+      const fr = (bm.ground ? BLAST_GROUND : BLAST_AIR)[clamp(bm.t >> 2, 0, 6)];
+      blit(fr, bm.x - 11, bm.y - (bm.ground ? 19 : 11), bm.t > 24 ? 0.5 : 1);
     }
-    for (const p of G.parts) rect(p.x, p.y, 1, 1, p.c);
+    for (const p of G.parts) rect(p.x, p.y, 0.8, 0.8, p.c);
     for (const t of G.texts) if ((t.life >> 2) & 1 || t.life > 30) text(t.text, t.x, t.y, '#ffffff', 'center', 6);
   }
 
   function drawDebris() {
-    for (const d of G.debris) blit(WHEELS[Math.floor(d.f) & 1], d.x, d.y);
+    for (const d of G.debris) {
+      if (!d.body) { blit(WHEEL[Math.floor(d.f) & 7], d.x - 4, d.y - 4); continue; }
+      ctx.save();
+      ctx.translate(DX(d.x), DY(d.y)); ctx.rotate(d.a);
+      ctx.drawImage(BUGGY, Math.round(-16 * SX), Math.round(-12 * SY), Math.round(33 * SX), Math.round(17 * SY));
+      ctx.restore();
+    }
   }
 
-  function lamp(x, y, on, col) {
-    rect(x, y, 8, 8, '#2a2e36');
-    rect(x + 1, y + 1, 6, 6, on ? col : '#0e1014');
-    if (on) rect(x + 2, y + 2, 2, 2, '#ffffff');
-  }
-
+  // ---------------------------------------------------------------- HUD (arcade layout)
+  // Deep-blue band: high score and player score on the left; a cyan panel with POINT, TIME and
+  // three warning lamps; the course map with the major checkpoints underneath.
   function drawHUD(field) {
-    rect(0, 0, W, HUD_H, '#000000');
-    rect(0, HUD_H - 1, W, 1, '#1f57b0');
-    const L = Math.max(4, Math.floor((W - 256) / 2) + 4), R = W - L;
-    text('1UP', L + 4, 3, '#ff3b30');
-    text(pad(G.score), L + 36, 3, '#ffffff');
-    text('HI', R - 76, 3, '#ff3b30');
-    text(pad(G.hi), R - 4, 3, '#ffffff', 'right');
+    rect(0, 0, W, HUD_H, '#0618d4');
+    const L = Math.max(0, Math.floor((W - 256) / 2));
+    for (const [x, y, w, h] of [[4, 4, 9, 4], [4, 1, 1.6, 3], [7.7, 1, 1.6, 3], [11.4, 1, 1.6, 3]]) rect(L + x, y + 1.5, w, h, C.yellow);
+    text(pad(G.hi), L + 16, 3, '#ff3030', 'left', 8, false);
+    text('1P', L + 4, 15, C.yellow, 'left', 8, false);
+    text('-', L + 20, 15, '#ff3030', 'left', 8, false);
+    text(pad(G.score), L + 28, 15, C.yellow, 'left', 8, false);
+    for (let i = 0; i < Math.min(G.lives - (field ? 1 : 0), 4); i++) blit(MINI_BUGGY, L + 4 + i * 18, 28);
 
+    const px = L + 86, pw = 134;
+    rect(px, 2, pw, 23, '#08b6e6');
     const cur = field ? currentLetter() : 0;
-    text('POINT', L + 4, 13, '#7ff0ff');
-    text(LETTERS[cur], L + 50, 13, '#ffd23f');
-    text('TIME', R - 76, 13, '#7ff0ff');
-    text(String(Math.floor(G.segFrames / 60)).padStart(3, '0'), R - 4, 13, '#ffffff', 'right');
+    text('POINT', px + 4, 4, '#000000', 'left', 8, false);
+    text(LETTERS[cur], px + 52, 4, '#000000', 'left', 8, false);
+    text('TIME', px + 4, 15, '#e8141c', 'left', 8, false);
+    text(String(Math.floor(G.segFrames / 60)).padStart(3, '0'), px + 38, 15, '#e8141c', 'left', 8, false);
 
     const blink = (G.frame >> 3) & 1;
     const ahead = G.dist + (G.buggy ? G.buggy.x : 0);
     const air = field && (G.wave || G.ufos.length > 0);
-    const gnd = field && (G.shells.length > 0 || G.obs.some(o => (o.type === 'tank' || o.type === 'boulder') && o.x > ahead && o.x - ahead < 300));
     const mines = field && G.obs.some(o => o.type === 'mine' && o.x > ahead && o.x - ahead < 300);
-    lamp(L + 68, 13, air && blink, '#ff3b30');
-    lamp(L + 78, 13, gnd && blink, '#ffd23f');
-    lamp(L + 88, 13, mines && blink, '#3ee87a');
+    const behind = field && (!!G.rocket || G.obs.some(o => (o.type === 'tank' || o.type === 'boulder') && o.x > ahead && o.x - ahead < 300));
+    [[air, '#ff3030'], [mines, C.yellow], [behind, '#30ff60']].forEach(([on, col], i) => {
+      const lx = px + pw - 12, ly = 3 + i * 7.2;
+      rect(lx, ly, 6, 6, '#000000');
+      if (on && blink) { rect(lx + 1, ly + 1, 4, 4, col); rect(lx + 1.5, ly + 1.5, 1.4, 1.4, '#ffffff'); }
+    });
 
-    // Course progress bar with the checkpoint letters.
-    const x0 = L + 4, x1 = R - 4, bw = x1 - x0, y = 32;
-    rect(x0, y, bw, 3, '#123a7a');
+    // Course map.
+    const x0 = px + 4, x1 = px + pw - 2, bw = x1 - x0, y = 33;
+    rect(x0, y, bw, 3, '#08b6e6');
     const p = field ? clamp((worldBuggy() - letterX(0)) / (25 * SEG), 0, 1) : 0;
-    if (p > 0) rect(x0, y, bw * p, 3, '#7ff0ff');
+    if (p > 0) rect(x0, y, bw * p, 3, '#e8141c');
     for (const i of CHECKPOINTS) {
       const x = x0 + bw * i / 25;
-      rect(x - 0.5, y - 2, 1, 7, '#ffd23f');
-      if (i) text(LETTERS[i], Math.min(x1 - 6, x - 3), y - 9, i <= G.cp && field ? '#ffd23f' : '#8a7426', 'left', 6);
+      rect(x - 0.5, y - 1.5, 1, 4.5, '#ffffff');
+      if (i) text(LETTERS[i], Math.min(x1 - 5, x - 2.5), y - 7, i <= G.cp && field ? C.yellow : '#e8141c', 'left', 5, false);
     }
-    blit(MINI_BUGGY, x0 + bw * p - 8, y - 5);
-  }
-
-  function drawGroundHUD() {
-    for (let i = 0; i < Math.min(G.lives - 1, 6); i++) blit(MINI_BUGGY, 6 + i * 18, H - 9);
-    text(G.course === 0 ? 'BEGINNER' : 'CHAMPION', W - 4, H - 9, '#ffd29a', 'right', 6);
+    text('>', x0 - 1, y - 7, '#e8141c', 'left', 5, false);
   }
 
   function centerBox(y, h, w = 208) {
     const x = Math.round(W / 2 - w / 2);
-    rect(x, y, w, h, '#1f57b0');
+    rect(x, y, w, h, '#0618d4');
     rect(x + 1, y + 1, w - 2, h - 2, '#000000');
   }
 
@@ -1087,30 +1349,30 @@ const Classic = (() => {
     const cx = W / 2, y = HUD_H + 8;
     if (p.t > 240 && (p.t >> 2) & 1) return;
     centerBox(y, 60, 224);
-    text(p.final ? 'CONGRATULATIONS!' : `TIME TO REACH POINT "${p.letter}"`, cx, y + 5, '#ffd23f', 'center');
+    text(p.final ? 'CONGRATULATIONS!' : `TIME TO REACH POINT "${p.letter}"`, cx, y + 5, C.yellow, 'center');
     const row = (label, val, yy, col) => { text(label, cx - 100, yy, col); text(String(val), cx + 100, yy, '#ffffff', 'right'); };
-    row('YOUR TIME', p.secs, y + 17, '#7ff0ff');
-    row('THE AVERAGE TIME', p.avg, y + 27, '#7ff0ff');
-    row('TOP RECORD', p.rec, y + 37, '#7ff0ff');
-    row(p.secs <= p.avg ? 'GOOD BONUS POINTS' : 'BONUS POINTS', p.bonus, y + 48, '#ff3b30');
+    row('YOUR TIME', p.secs, y + 17, '#08b6e6');
+    row('THE AVERAGE TIME', p.avg, y + 27, '#08b6e6');
+    row('TOP RECORD', p.rec, y + 37, '#08b6e6');
+    row(p.bonus ? 'GOOD BONUS POINTS' : 'NO BONUS', p.bonus, y + 48, '#ff3030');
   }
 
   function drawOverlays() {
     const cx = W / 2, blink = (G.frame >> 4) & 1;
     if (G.state === 'ready') {
       centerBox(HUD_H + 26, 36, 176);
-      text(G.course === 0 ? 'BEGINNER COURSE' : 'CHAMPION COURSE', cx, HUD_H + 31, '#7ff0ff', 'center');
-      text(`POINT "${LETTERS[G.cp]}"`, cx, HUD_H + 42, '#ffd23f', 'center');
+      text(G.course === 0 ? 'BEGINNER COURSE' : 'CHAMPION COURSE', cx, HUD_H + 31, '#08b6e6', 'center');
+      text(`POINT "${LETTERS[G.cp]}"`, cx, HUD_H + 42, C.yellow, 'center');
       if (blink) text('GET READY', cx, HUD_H + 52, '#ffffff', 'center', 6);
     }
     if (G.panel) drawPanel(G.panel);
     if (G.state === 'gameover') {
       centerBox(HUD_H + 40, 22, 112);
-      text('GAME OVER', cx, HUD_H + 47, '#ff3b30', 'center');
+      text('GAME OVER', cx, HUD_H + 47, '#ff3030', 'center');
     }
     if (G.demo) {
-      text('DEMONSTRATION', cx, HUD_H + 4, '#7ff0ff', 'center');
-      if (blink) text('PUSH START BUTTON', cx, HUD_H + 16, '#ffd23f', 'center', 6);
+      text('DEMONSTRATION', cx, HUD_H + 4, '#08b6e6', 'center');
+      if (blink) text('PUSH START BUTTON', cx, HUD_H + 16, C.yellow, 'center', 6);
     }
   }
 
@@ -1119,43 +1381,43 @@ const Classic = (() => {
     ctx.font = `${Math.round(size * SY)}px ${FONT}`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const X = DX(W / 2), Y = DY(y), o = Math.max(2, Math.round(SY * 2));
-    ctx.fillStyle = '#8c1d12'; ctx.fillText(str, X + o, Y + o);
+    ctx.fillStyle = '#0618d4'; ctx.fillText(str, X + o, Y + o);
     const g = ctx.createLinearGradient(0, Y, 0, Y + size * SY);
-    g.addColorStop(0, '#fff3a0'); g.addColorStop(0.5, '#ffd23f'); g.addColorStop(0.51, '#ff8a1f'); g.addColorStop(1, '#ff3b30');
+    g.addColorStop(0, '#fffaa0'); g.addColorStop(0.5, C.yellow); g.addColorStop(0.51, '#ff9a20'); g.addColorStop(1, '#e8141c');
     ctx.fillStyle = g; ctx.fillText(str, X, Y);
   }
 
   function drawTitle() {
     const cx = W / 2;
-    logo('LUNAR', HUD_H + 8, 24);
-    logo('PATROL', HUD_H + 36, 24);
-    if ((G.frame >> 5) & 1) text('PUSH START BUTTON', cx, HUD_H + 68, '#ffffff', 'center', 8, true);
-    text('1 PLAYER  3 BUGGIES', cx, HUD_H + 82, '#7ff0ff', 'center', 6, true);
-    text('CLASSIC MODE', cx, HUD_H + 94, '#ffd23f', 'center', 6, true);
-    const t = GROUND_Y - 18;
-    drawBuggyAt(cx - 16, t, G.buggy ? G.buggy.wb : [0, 0, 0], G.dist / 4);
+    logo('LUNAR', HUD_H + 6, 24);
+    logo('PATROL', HUD_H + 33, 24);
+    if ((G.frame >> 5) & 1) text('PUSH START BUTTON', cx, HUD_H + 64, '#ffffff', 'center', 8, true);
+    text('1 PLAYER  3 BUGGIES', cx, HUD_H + 78, '#08b6e6', 'center', 6, true);
+    text('CLASSIC MODE', cx, HUD_H + 90, C.yellow, 'center', 6, true);
+    drawBuggy();
   }
 
   function drawPoints() {
     const cx = W / 2;
-    text('SCORE ADVANCE TABLE', cx, HUD_H + 4, '#ffd23f', 'center');
+    text('SCORE ADVANCE TABLE', cx, HUD_H + 3, C.yellow, 'center');
     const items = [
-      [UFO1[(G.frame >> 3) & 1], '100 PTS'], [UFO2[(G.frame >> 3) & 1], '200 PTS'], [UFO3[(G.frame >> 3) & 1], '300 PTS'],
-      [TANK, '200 PTS'], [BOULDER[(G.frame >> 3) & 3], '100 PTS'], [ROCK_L, '50+100 PTS'], [MINE[(G.frame >> 4) & 1], 'JUMP 100'],
+      [UFO1[(G.frame >> 3) & 1], '100 PTS'], [UFO2[(G.frame >> 3) & 1], '100 PTS'], [UFO3[(G.frame >> 3) & 1], '200 PTS'],
+      [TANK, '200 PTS'], [ROCK_L, '100 PTS'], [BOULDER[(G.frame >> 3) & 7], '50 PTS'], [BOMB[0], '100 PTS'],
     ];
     items.forEach(([img, label], i) => {
-      const y = HUD_H + 18 + i * 15;
-      blit(img, cx - 54 - img.width / 2, y + 4 - img.height / 2);
-      text('= ' + label, cx - 30, y, '#ffffff', 'left');
+      const y = HUD_H + 15 + i * 15;
+      blit(img, cx - 50 - img.lw * 0.7, y + 4 - img.lh * 0.7, 1, 1.4);
+      text('= ' + label, cx - 28, y, '#ffffff', 'left');
     });
+    text('SQUAD BONUS 500-1000', cx, HUD_H + 122, '#08b6e6', 'center', 6);
   }
 
   function drawScores() {
     const cx = W / 2;
-    text('BEST PATROLS', cx, HUD_H + 8, '#ffd23f', 'center');
+    text('BEST PATROLS', cx, HUD_H + 8, C.yellow, 'center');
     scores.forEach((s, i) => {
-      const y = HUD_H + 28 + i * 14, col = i === 0 ? '#ffd23f' : '#ffffff';
-      text(['1ST', '2ND', '3RD', '4TH', '5TH'][i], cx - 80, y, '#7ff0ff');
+      const y = HUD_H + 28 + i * 14, col = i === 0 ? C.yellow : '#ffffff';
+      text(['1ST', '2ND', '3RD', '4TH', '5TH'][i], cx - 80, y, '#08b6e6');
       text(s.name, cx - 24, y, col);
       text(pad(s.score), cx + 80, y, col, 'right');
     });
@@ -1167,16 +1429,14 @@ const Classic = (() => {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
     const field = ['ready', 'play', 'dying', 'gameover'].includes(G.state);
-    drawSky();
     drawBackdrop();
+    drawGround();
     if (field) {
       drawCraters();
-      drawSigns();
       drawObstacles();
-      if (G.state === 'dying') drawDebris();
+      if (G.state === 'dying' && !G.sink) drawDebris();
       else if (G.state !== 'gameover') drawBuggy();
       drawAir();
-      drawGroundHUD();
     }
     drawEffects();
     drawHUD(field);
